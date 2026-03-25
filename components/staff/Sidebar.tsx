@@ -73,11 +73,11 @@ export default function Sidebar() {
   const sidebarContent = (
     <div className={`flex flex-col h-full bg-slate-900 text-white transition-all duration-300 ${collapsed ? 'w-16' : 'w-64'}`}>
       {/* Logo / Brand */}
-      <div className={`flex items-center gap-3 px-4 py-4 border-b border-slate-700/50 ${collapsed ? 'justify-center' : ''}`}>
+      <div className={`flex items-center gap-3 px-4 py-4 border-b border-slate-700/50 bg-white ${collapsed ? 'justify-center' : ''}`}>
         {collapsed ? (
           <Image src="/logo.png" alt="Greenergy" width={32} height={32} className="rounded" />
         ) : (
-          <Image src="/logo.png" alt="Greenergy Solar Solutions" width={130} height={55} className="drop-shadow" />
+          <Image src="/logo.png" alt="Greenergy Solar Solutions" width={130} height={55} />
         )}
       </div>
 

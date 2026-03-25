@@ -3,7 +3,8 @@
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Sun, Eye, EyeOff } from 'lucide-react'
+import Image from 'next/image'
+import { Eye, EyeOff } from 'lucide-react'
 
 function ResetPasswordContent() {
   const router = useRouter()
@@ -52,9 +53,7 @@ function ResetPasswordContent() {
       <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8">
 
         <div className="flex justify-center mb-6">
-          <div className="w-14 h-14 bg-slate-900 rounded-2xl flex items-center justify-center">
-            <Sun size={28} className="text-green-400" />
-          </div>
+          <Image src="/logo.png" alt="Greenergy Solar Solutions" width={140} height={70} />
         </div>
 
         <h1 className="text-2xl font-bold text-slate-900 text-center mb-1">Set New Password</h1>

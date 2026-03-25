@@ -6,9 +6,10 @@ import Link from 'next/link'
 import {
   LayoutDashboard, CheckSquare, MapPin, Briefcase,
   FileText, Calendar, Users, BarChart3, Settings,
-  LogOut, ChevronLeft, ChevronRight, Sun, Bell,
+  LogOut, ChevronLeft, ChevronRight, Bell,
   ClipboardList, UserCheck
 } from 'lucide-react'
+import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
 
 type Role = 'admin' | 'task_manager' | 'employee'
@@ -72,17 +73,11 @@ export default function Sidebar() {
   const sidebarContent = (
     <div className={`flex flex-col h-full bg-slate-900 text-white transition-all duration-300 ${collapsed ? 'w-16' : 'w-64'}`}>
       {/* Logo / Brand */}
-      <div className={`flex items-center gap-3 px-4 py-5 border-b border-slate-700/50 ${collapsed ? 'justify-center' : ''}`}>
-        <div className="w-9 h-9 rounded-lg bg-green-600 flex items-center justify-center shrink-0">
-          <Sun size={20} className="text-white" />
-        </div>
-        {!collapsed && (
-          <div>
-            <p className="text-sm font-bold text-white leading-tight">
-              <span className="text-green-400">gre</span>ENERGY
-            </p>
-            <p className="text-[10px] text-slate-400 tracking-widest">STAFF PORTAL</p>
-          </div>
+      <div className={`flex items-center gap-3 px-4 py-4 border-b border-slate-700/50 ${collapsed ? 'justify-center' : ''}`}>
+        {collapsed ? (
+          <Image src="/logo.png" alt="Greenergy" width={32} height={32} className="rounded" />
+        ) : (
+          <Image src="/logo.png" alt="Greenergy Solar Solutions" width={130} height={55} className="drop-shadow" />
         )}
       </div>
 

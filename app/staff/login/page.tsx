@@ -4,7 +4,8 @@ import { useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Eye, EyeOff, Zap, Sun, CheckCircle } from 'lucide-react'
+import Image from 'next/image'
+import { Eye, EyeOff, Zap } from 'lucide-react'
 
 export default function LoginPage() {
   return (
@@ -75,15 +76,8 @@ function LoginContent() {
         <div className="relative z-10 text-center max-w-sm">
           {/* Logo */}
           <div className="mb-8 flex justify-center">
-            <div className="w-20 h-20 bg-white/10 backdrop-blur rounded-2xl border border-white/20 flex items-center justify-center shadow-2xl">
-              <Sun size={40} className="text-green-400" />
-            </div>
+            <Image src="/logo.png" alt="Greenergy Solar Solutions" width={180} height={100} className="drop-shadow-2xl" />
           </div>
-
-          <h1 className="text-4xl font-black text-white mb-1">
-            <span className="text-green-400">gre</span>ENERGY
-          </h1>
-          <p className="text-green-300/80 tracking-[0.3em] text-xs font-semibold mb-2">SOLAR SOLUTIONS</p>
           <p className="text-slate-400 text-xs mb-10">No.234, Lawspet Main Road, Pondicherry</p>
 
           <div className="border-t border-white/10 pt-8">
@@ -118,13 +112,7 @@ function LoginContent() {
 
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 bg-slate-900 rounded-xl flex items-center justify-center">
-              <Sun size={20} className="text-green-400" />
-            </div>
-            <div>
-              <p className="text-sm font-bold"><span className="text-green-600">gre</span>ENERGY</p>
-              <p className="text-[10px] text-slate-400 tracking-widest">STAFF PORTAL</p>
-            </div>
+            <Image src="/logo.png" alt="Greenergy Solar Solutions" width={120} height={60} />
           </div>
 
           {/* Error banners */}

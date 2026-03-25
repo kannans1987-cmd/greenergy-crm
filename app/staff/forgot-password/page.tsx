@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
-import { Sun } from 'lucide-react'
+import Image from 'next/image'
 
 export default function ForgotPasswordPage() {
   const supabase = createClient()
@@ -36,9 +36,7 @@ export default function ForgotPasswordPage() {
       <div className="w-full max-w-md bg-white rounded-2xl shadow-lg p-8">
 
         <div className="flex justify-center mb-6">
-          <div className="w-14 h-14 bg-slate-900 rounded-2xl flex items-center justify-center">
-            <Sun size={28} className="text-green-400" />
-          </div>
+          <Image src="/logo.png" alt="Greenergy Solar Solutions" width={140} height={70} />
         </div>
 
         <h1 className="text-2xl font-bold text-slate-900 text-center mb-1">Forgot Password</h1>

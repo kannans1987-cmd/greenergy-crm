@@ -73,36 +73,49 @@ function LoginContent() {
           style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'40\' height=\'40\' viewBox=\'0 0 40 40\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23ffffff\' fill-opacity=\'1\'%3E%3Cpath d=\'M0 40L40 0H20L0 20M40 40V20L20 40\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")' }}
         />
 
-        <div className="relative z-10 text-center max-w-sm">
-          {/* Logo */}
+        <div className="relative z-10 text-center max-w-sm w-full">
+          {/* Logo on white card */}
           <div className="mb-8 flex justify-center">
-            <Image src="/logo.png" alt="Greenergy Solar Solutions" width={180} height={100} className="drop-shadow-2xl" />
+            <div className="bg-white rounded-2xl px-8 py-5 shadow-2xl">
+              <Image src="/logo.png" alt="Greenergy Solar Solutions" width={200} height={110} />
+            </div>
           </div>
-          <p className="text-slate-400 text-xs mb-10">No.234, Lawspet Main Road, Pondicherry</p>
 
-          <div className="border-t border-white/10 pt-8">
-            <h2 className="text-white text-xl font-bold mb-2">Employee Operations Portal</h2>
+          {/* Address */}
+          <p className="text-green-300/70 text-xs mb-8 tracking-wide">
+            📍 No.234, Lawspet Main Road, Pondicherry
+          </p>
+
+          {/* Divider */}
+          <div className="border-t border-white/10 pt-8 mb-6">
+            <h2 className="text-white text-2xl font-bold mb-2">Employee Operations Portal</h2>
             <p className="text-slate-400 text-sm leading-relaxed">
               Manage daily tasks, track attendance with GPS, monitor project progress, and access job cards — all from one place.
             </p>
           </div>
 
-          <div className="mt-8 grid grid-cols-3 gap-3">
+          {/* Feature cards */}
+          <div className="grid grid-cols-3 gap-3 mb-8">
             {[
-              { label: 'Task Tracking',  icon: '✓' },
+              { label: 'Task Tracking',  icon: '✅' },
               { label: 'GPS Attendance', icon: '📍' },
               { label: 'Job Cards',      icon: '📋' },
             ].map(item => (
-              <div key={item.label} className="bg-white/5 border border-white/10 rounded-xl p-3">
-                <p className="text-lg mb-1">{item.icon}</p>
-                <p className="text-green-300 text-[10px] font-medium">{item.label}</p>
+              <div key={item.label} className="bg-white/8 border border-white/15 rounded-xl p-4 hover:bg-white/10 transition">
+                <p className="text-2xl mb-2">{item.icon}</p>
+                <p className="text-green-300 text-[10px] font-semibold tracking-wide">{item.label}</p>
               </div>
             ))}
           </div>
 
-          <p className="text-slate-600 text-xs mt-10">
-            MNRE Certified · CII Certified · Est. 2011
-          </p>
+          {/* Certifications */}
+          <div className="flex items-center justify-center gap-2 flex-wrap">
+            {['MNRE Certified', 'CII Certified', 'Est. 2011'].map(tag => (
+              <span key={tag} className="text-[10px] text-slate-500 border border-slate-700 rounded-full px-3 py-1">
+                {tag}
+              </span>
+            ))}
+          </div>
         </div>
       </div>
 

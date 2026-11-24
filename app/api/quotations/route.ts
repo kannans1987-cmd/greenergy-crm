@@ -38,6 +38,20 @@ export async function GET(req: NextRequest) {
 
 const QUOTATION_DOCS_BUCKET = 'quotation-documents'
 
+// The public website (www.greenergypdy.com) posts its enquiry form here directly
+const WEBSITE_ORIGINS = ['https://www.greenergypdy.com', 'https://greenergypdy.com', 'http://localhost:8000']
+
+function cors(req: NextRequest): Record<string, string> {
+  const origin = req.headers.get('origin') ?? ''
+  return WEBSITE_ORIGINS.includes(origin)
+    ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type', Vary: 'Origin' }
+    : {}
+}
+
+export function OPTIONS(req: NextRequest) {
+  return new NextResponse(null, { status: 204, headers: cors(req) })
+}
+
 function fileExt(name: string): string {
   const parts = name.split('.')
   return parts.length > 1 ? parts.pop()!.toLowerCase() : 'bin'
@@ -66,6 +80,7 @@ async function uploadQuotationFile(
 // Writes through the service role: the database no longer accepts anonymous inserts,
 // and only the enquiry fields below can be set (never status, approval or prices).
 export async function POST(req: NextRequest) {
+  const headers = cors(req)
   const supabase = createAdminClient()
   const formData = await req.formData()
 
@@ -88,10 +103,10 @@ export async function POST(req: NextRequest) {
   const mobile = str('mobile')
 
   if (!customer_name || !mobile) {
-    return NextResponse.json({ error: 'customer_name and mobile are required.' }, { status: 400 })
+    return NextResponse.json({ error: 'customer_name and mobile are required.' }, { status: 400, headers })
   }
   if (customer_name.length > 120 || !/^[0-9+\-\s]{8,16}$/.test(mobile)) {
-    return NextResponse.json({ error: 'Please enter a valid name and mobile number.' }, { status: 400 })
+    return NextResponse.json({ error: 'Please enter a valid name and mobile number.' }, { status: 400, headers })
   }
 
   // Price and subsidy are worked out here from the current price list, not trusted from the browser
@@ -163,7 +178,7 @@ export async function POST(req: NextRequest) {
     .select()
     .single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 500, headers })
 
   const quotationId = (quotation as { id: string }).id
   if (listed) await saveCosting(quotationId, listed.w, listed.cv, listed.mv)
@@ -225,6 +240,18 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // Website enquiries: tell the CEO and the admin managers straight away
+  if ((str('source') || 'website') === 'website') {
+    const { data: staff } = await supabase.from('profiles').select('id').in('role', ['admin', 'task_manager']).eq('status', 'active')
+    if (staff?.length) {
+      await supabase.from('notifications').insert(staff.map((p: { id: string }) => ({
+        user_id: p.id, type: 'quotation', title: 'New website enquiry',
+        message: `${customer_name} · ${mobile}${str('city') ? ' · ' + str('city') : ''}`,
+        link: `/staff/quotations/${quotationId}`,
+      })))
+    }
+  }
+
   // Insert initial status history entry
   await supabase.from('quotation_status_history').insert({
     quotation_id:     quotationId,
@@ -235,5 +262,5 @@ export async function POST(req: NextRequest) {
     remarks:          'Quotation request submitted.',
   })
 
-  return NextResponse.json(quotation, { status: 201 })
+  return NextResponse.json(quotation, { status: 201, headers })
 }

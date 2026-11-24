@@ -4,6 +4,7 @@ import { createAdminClient } from '@/lib/supabase/server'
 import { residentialSubsidy, subsidyEligible, buildPrice } from '@/lib/workflow'
 import { loadPricing, toOpts, quotationColumns, saveCosting } from '@/lib/pricing-server'
 import { workout, type Workout } from '@/lib/pricing-engine'
+import { sendLeadEmail } from '@/lib/mailer'
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient()
@@ -240,7 +241,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // Website enquiries: tell the CEO and the admin managers straight away
+  // Website enquiries: tell the CEO and the admin managers straight away (CRM notification + email)
+  let emailed = false
   if ((str('source') || 'website') === 'website') {
     const { data: staff } = await supabase.from('profiles').select('id').in('role', ['admin', 'task_manager']).eq('status', 'active')
     if (staff?.length) {
@@ -249,6 +251,12 @@ export async function POST(req: NextRequest) {
         message: `${customer_name} · ${mobile}${str('city') ? ' · ' + str('city') : ''}`,
         link: `/staff/quotations/${quotationId}`,
       })))
+    }
+    try {
+      emailed = await sendLeadEmail({ quotationId, quotationNumber: (quotation as { quotation_number?: string }).quotation_number,
+        name: customer_name, mobile, city: str('city'), notes: str('notes') })
+    } catch (err) {
+      console.error('[quotations] enquiry email failed:', err)
     }
   }
 
@@ -262,5 +270,6 @@ export async function POST(req: NextRequest) {
     remarks:          'Quotation request submitted.',
   })
 
-  return NextResponse.json(quotation, { status: 201, headers })
+  // emailed tells the website whether it still needs to send its own backup email
+  return NextResponse.json({ ...(quotation as Record<string, unknown>), emailed }, { status: 201, headers })
 }

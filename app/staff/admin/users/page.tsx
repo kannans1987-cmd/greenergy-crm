@@ -13,6 +13,7 @@ interface Registration {
 interface Employee {
   id: string; full_name: string; email: string; role: string
   designation: string | null; department: string | null; status: string
+  price_access: string | null
 }
 type Tab = 'pending' | 'employees'
 
@@ -32,7 +33,7 @@ export default function UserManagementPage() {
   const loadData = useCallback(async () => {
     const [{ data: regs }, { data: emps }] = await Promise.all([
       supabase.from('employee_registrations').select('*').eq('status','pending').order('created_at'),
-      supabase.from('profiles').select('id,full_name,email,role,designation,department,status').order('full_name'),
+      supabase.from('profiles').select('id,full_name,email,role,designation,department,status,price_access').order('full_name'),
     ])
     if (regs) setPending(regs as Registration[])
     if (emps) setEmployees(emps as Employee[])
@@ -71,6 +72,15 @@ export default function UserManagementPage() {
     } catch (err: unknown) {
       showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`)
     } finally { setActionId(null); setRejectId(null); setRejectNote('') }
+  }
+
+  // Who may edit the supplier price list (and optionally the margin) besides the CEO
+  const handlePriceAccess = async (id: string, value: string) => {
+    const price_access = value || null
+    const { error } = await supabase.from('profiles').update({ price_access }).eq('id', id)
+    if (error) { showToast(error.message); return }
+    setEmployees(prev => prev.map(e => e.id === id ? { ...e, price_access } : e))
+    showToast(price_access ? 'Price list access given' : 'Price list access removed')
   }
 
   const handleRoleChange = async (id: string, role: string) => {
@@ -192,7 +202,7 @@ export default function UserManagementPage() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-100">
                   <tr>
-                    {['Name','Email','Designation','Role','Status','Actions'].map(h => (
+                    {['Name','Email','Designation','Role','Price list access','Status','Actions'].map(h => (
                       <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -215,11 +225,21 @@ export default function UserManagementPage() {
                           <Shield size={12} className={emp.role === 'admin' ? 'text-purple-500' : emp.role === 'task_manager' ? 'text-blue-500' : 'text-slate-400'} />
                           <select value={emp.role} onChange={e => handleRoleChange(emp.id, e.target.value)}
                             className="text-xs bg-transparent text-slate-700 border-none focus:outline-none cursor-pointer">
-                            <option value="employee">Employee</option>
-                            <option value="task_manager">Task Manager</option>
-                            <option value="admin">Admin</option>
+                            <option value="employee">Staff (sales / field)</option>
+                            <option value="task_manager">Admin manager</option>
+                            <option value="admin">CEO (admin)</option>
                           </select>
                         </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        {emp.role === 'admin' ? <span className="text-xs text-slate-500">Full (CEO)</span> : (
+                          <select value={emp.price_access ?? ''} onChange={e => handlePriceAccess(emp.id, e.target.value)} aria-label={`Price list access for ${emp.full_name}`}
+                            className="text-xs bg-transparent text-slate-700 border border-slate-200 rounded px-1 py-0.5 cursor-pointer">
+                            <option value="">None</option>
+                            <option value="prices">Supplier prices</option>
+                            <option value="prices_and_margin">Prices &amp; margin</option>
+                          </select>
+                        )}
                       </td>
                       <td className="px-4 py-4">
                         <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-semibold ${emp.status === 'active' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>

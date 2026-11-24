@@ -221,9 +221,9 @@ function LoginContent() {
 
           {/* Back to public site */}
           <p className="text-center text-xs text-slate-400 mt-4">
-            <Link href="/" className="hover:text-slate-600 transition">
+            <a href="https://www.greenergypdy.com" className="hover:text-slate-600 transition">
               ← Back to Greenergy Website
-            </Link>
+            </a>
           </p>
 
           <p className="text-center text-xs text-slate-300 mt-6">

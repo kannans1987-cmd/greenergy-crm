@@ -16,3 +16,7 @@ out/
 .DS_Store
 *.pem
 npm-debug.log*
+
+# private supplier prices, cost model and margin (repo is public) — never commit
+supabase/pricing/
+tsconfig.tsbuildinfo

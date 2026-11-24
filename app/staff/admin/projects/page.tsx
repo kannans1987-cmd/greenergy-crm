@@ -330,6 +330,12 @@ export default function ProjectsPage() {
 
                 <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100">
                   <Link
+                    href={`/staff/projects/${proj.id}`}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-50 text-emerald-700 text-xs font-semibold rounded-lg hover:bg-emerald-100 transition"
+                  >
+                    Milestones <ChevronRight size={11} />
+                  </Link>
+                  <Link
                     href={`/staff/job-cards?project=${proj.id}`}
                     className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-slate-50 text-slate-600 text-xs font-semibold rounded-lg hover:bg-slate-100 transition"
                   >

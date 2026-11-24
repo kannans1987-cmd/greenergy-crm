@@ -20,20 +20,24 @@ interface NavItem {
   icon:  React.ElementType
   adminOnly?: boolean
   managerOnly?: boolean
+  priceEditors?: boolean   // CEO, or staff the CEO gave price-list access
 }
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard',        href: '/staff/dashboard',      icon: LayoutDashboard },
   { label: 'My Tasks',         href: '/staff/tasks',          icon: CheckSquare },
   { label: 'Attendance',       href: '/staff/attendance',     icon: MapPin },
-  { label: 'My Projects',      href: '/staff/projects',       icon: Briefcase },
+  { label: 'Quotations',       href: '/staff/quotations',     icon: ClipboardList },
+  { label: 'Projects & Milestones', href: '/staff/projects',  icon: Briefcase },
   { label: 'Job Cards',        href: '/staff/job-cards',      icon: FileText },
   { label: 'Leave',            href: '/staff/leave',          icon: Calendar },
   // Manager/Admin extras
   { label: 'Admin Dashboard',  href: '/staff/admin',          icon: BarChart3,    adminOnly: true },
   { label: 'User Management',  href: '/staff/admin/users',    icon: UserCheck,    adminOnly: true },
-  { label: 'All Projects',     href: '/staff/admin/projects', icon: ClipboardList, adminOnly: true },
-  { label: 'Reports',          href: '/staff/admin/reports',  icon: BarChart3,    adminOnly: true },
+  { label: 'All Projects',     href: '/staff/admin/projects',          icon: ClipboardList, adminOnly: true },
+  { label: 'Price List',       href: '/staff/price-list',              icon: Settings,      priceEditors: true },
+  { label: 'Pricing Settings', href: '/staff/admin/pricing',           icon: Settings,      adminOnly: true },
+  { label: 'Reports',          href: '/staff/admin/reports',           icon: BarChart3,     adminOnly: true },
 ]
 
 export default function Sidebar() {
@@ -43,13 +47,13 @@ export default function Sidebar() {
 
   const [collapsed,  setCollapsed]  = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [profile,    setProfile]    = useState<{ full_name: string; role: Role; designation?: string } | null>(null)
+  const [profile,    setProfile]    = useState<{ full_name: string; role: Role; designation?: string; price_access?: string | null } | null>(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return
-      supabase.from('profiles').select('full_name,role,designation').eq('id', user.id).single()
-        .then(({ data }) => { if (data) setProfile(data as { full_name: string; role: Role; designation?: string }) })
+      supabase.from('profiles').select('full_name,role,designation,price_access').eq('id', user.id).single()
+        .then(({ data }) => { if (data) setProfile(data as { full_name: string; role: Role; designation?: string; price_access?: string | null }) })
     })
   }, [])
 
@@ -64,6 +68,7 @@ export default function Sidebar() {
   const visibleItems = NAV_ITEMS.filter(item => {
     if (item.adminOnly   && role !== 'admin') return false
     if (item.managerOnly && role === 'employee') return false
+    if (item.priceEditors && role !== 'admin' && !profile?.price_access) return false
     return true
   })
 
@@ -123,7 +128,7 @@ export default function Sidebar() {
             </div>
             <div className="overflow-hidden">
               <p className="text-white text-xs font-semibold truncate">{profile.full_name}</p>
-              <p className="text-slate-400 text-[10px] capitalize">{profile.role?.replace('_', ' ')}</p>
+              <p className="text-slate-400 text-[10px]">{profile.role === 'admin' ? 'CEO' : profile.role === 'task_manager' ? 'Admin manager' : (profile.designation || 'Staff')}</p>
             </div>
           </div>
         )}

@@ -1,13 +1,13 @@
 import { createClient } from '@/lib/supabase/server'
 import Header from '@/components/staff/Header'
-import { format } from 'date-fns'
-import { Briefcase, MapPin, Calendar } from 'lucide-react'
+import Link from 'next/link'
+import { Briefcase, MapPin } from 'lucide-react'
+import { milestoneProgress } from '@/lib/workflow'
 
 interface ProjectItem {
-  id: string; project_number: string; name: string; customer_name: string | null
-  site_address: string | null; project_type: string | null; capacity_kwp: number | null
-  start_date: string | null; expected_completion: string | null; status: string
-  role_in_project: string | null; assigned_date: string
+  id: string; project_number: string; job_number: string | null; name: string; customer_name: string | null
+  site_address: string | null; capacity_kwp: number | null; status: string; admin_officer_id: string | null
+  target_commissioning: string | null; officer: { full_name: string } | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -16,64 +16,64 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-600',
 }
 
-export default async function MyProjectsPage() {
+export default async function ProjectsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { data: myProjects } = await supabase
-    .from('project_employees')
-    .select('role_in_project,assigned_date,projects(id,project_number,name,customer_name,site_address,project_type,capacity_kwp,start_date,expected_completion,status)')
-    .eq('employee_id', user?.id ?? '')
-    .order('assigned_date', { ascending: false })
+  // Row-level security returns the projects this person may see: managers all;
+  // others where they are the appointed officer, on the team, or made the sale.
+  const { data } = await supabase
+    .from('projects')
+    .select('id, project_number, job_number, name, customer_name, site_address, capacity_kwp, status, admin_officer_id, target_commissioning, officer:admin_officer_id ( full_name )')
+    .order('created_at', { ascending: false })
+    .limit(300)
+  const projects = (data ?? []) as unknown as ProjectItem[]
 
-  type ProjRow = { role_in_project: string | null; assigned_date: string; projects: Omit<ProjectItem,'role_in_project'|'assigned_date'> | null }
-  const projects = ((myProjects ?? []) as unknown as ProjRow[]).map(r => ({ ...r.projects, role_in_project: r.role_in_project, assigned_date: r.assigned_date })) as ProjectItem[]
+  const ids = projects.map(p => p.id)
+  type StageRow = { project_id: string; status: string; planned_date: string | null; stage_name: string; sort_order: number }
+  const { data: stages } = ids.length
+    ? await supabase.from('project_stage_history').select('project_id, status, planned_date, stage_name, sort_order').in('project_id', ids)
+    : { data: [] as StageRow[] }
+  const byProject = new Map<string, StageRow[]>()
+  for (const s of (stages ?? []) as StageRow[]) byProject.set(s.project_id, [...(byProject.get(s.project_id) ?? []), s])
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
-      <Header title="My Projects" subtitle="Projects you are currently assigned to" />
-      <div className="flex-1 p-4 sm:p-6 max-w-5xl mx-auto w-full">
+      <Header title="Projects & milestones" subtitle="Numbered job cards from accepted, hot quotations — tracked from order to end of life" />
+      <div className="flex-1 p-4 sm:p-6 max-w-6xl mx-auto w-full">
         {projects.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-100 p-16 text-center">
             <Briefcase size={40} className="mx-auto mb-3 text-slate-300" />
-            <p className="text-slate-400 text-sm">You are not assigned to any projects yet.</p>
-            <p className="text-slate-300 text-xs mt-1">Ask your manager to assign you to a project.</p>
+            <p className="text-slate-400 text-sm">No projects for you yet.</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {projects.map(proj => (
-              <div key={proj.id} className="bg-white rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition p-5">
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div>
-                    <p className="text-xs text-slate-400 font-mono">{proj.project_number}</p>
-                    <h4 className="font-bold text-slate-900 text-sm mt-0.5">{proj.name}</h4>
-                    {proj.role_in_project && (
-                      <p className="text-xs text-green-600 mt-0.5">🔧 {proj.role_in_project}</p>
-                    )}
+            {projects.map(proj => {
+              const st = (byProject.get(proj.id) ?? []).sort((a, b) => a.sort_order - b.sort_order)
+              const prog = milestoneProgress(st)
+              const next = st.find(s => !['completed', 'skipped'].includes(s.status))
+              return (
+                <Link key={proj.id} href={`/staff/projects/${proj.id}`} className="bg-white rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition p-5 block">
+                  <div className="flex items-start justify-between gap-2 mb-2">
+                    <div>
+                      <p className="text-xs text-slate-400 font-mono">{proj.job_number ?? proj.project_number}</p>
+                      <h4 className="font-bold text-slate-900 text-sm mt-0.5">{proj.customer_name ?? proj.name}</h4>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${STATUS_COLORS[proj.status] ?? 'bg-slate-100 text-slate-600'}`}>{proj.status.replace('_', ' ')}</span>
                   </div>
-                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${STATUS_COLORS[proj.status] ?? 'bg-slate-100 text-slate-600'}`}>
-                    {(proj.status).replace('_',' ')}
-                  </span>
-                </div>
-                {proj.customer_name && <p className="text-xs text-slate-600 mb-1">👤 {proj.customer_name}</p>}
-                {proj.site_address && (
-                  <p className="text-xs text-slate-500 flex items-start gap-1 mb-2">
-                    <MapPin size={10} className="shrink-0 mt-0.5" /> {proj.site_address}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-3 mt-3 text-xs text-slate-500">
-                  {proj.capacity_kwp && <span>⚡ {proj.capacity_kwp} kWp</span>}
-                  {proj.project_type && <span className="capitalize">{proj.project_type!.replace('_',' ')}</span>}
-                </div>
-                {(proj.start_date || proj.expected_completion) && (
-                  <div className="flex items-center gap-1 mt-2 text-xs text-slate-400">
-                    <Calendar size={10} />
-                    {proj.start_date && format(new Date(proj.start_date!), 'dd MMM yy')}
-                    {proj.expected_completion && ` → ${format(new Date(proj.expected_completion!), 'dd MMM yy')}`}
-                  </div>
-                )}
-              </div>
-            ))}
+                  {proj.site_address && <p className="text-xs text-slate-500 flex items-start gap-1 mb-2"><MapPin size={10} className="shrink-0 mt-0.5" /> {proj.site_address}</p>}
+                  <p className="text-xs text-slate-600">{proj.capacity_kwp ? `⚡ ${proj.capacity_kwp} kW · ` : ''}Officer: {proj.officer?.full_name ?? <span className="text-amber-600">not appointed</span>}
+                    {proj.admin_officer_id === user?.id ? ' (you)' : ''}</p>
+                  {st.length > 0 && (
+                    <div className="mt-3">
+                      <div className="flex items-center gap-2"><div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-green-600" style={{ width: `${prog.pct}%` }} /></div>
+                        <span className="text-xs text-slate-500">{prog.done}/{prog.total}</span></div>
+                      <p className="text-xs text-slate-500 mt-1">Next: {next?.stage_name ?? 'All done'}{prog.overdue ? <span className="text-red-600 font-semibold"> · {prog.overdue} overdue</span> : null}</p>
+                    </div>
+                  )}
+                </Link>
+              )
+            })}
           </div>
         )}
       </div>

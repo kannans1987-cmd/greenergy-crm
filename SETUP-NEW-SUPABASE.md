@@ -1,0 +1,79 @@
+# Moving the CRM to a new Supabase project
+
+The old Supabase project behind greenergy-crm.vercel.app no longer exists (its address stopped resolving in November 2026), so nobody can sign in until these steps are done. **Update (24 Nov 2026):** the original `greenergy-crm` project was only paused (free projects pause after a week without use) and has been restored, with its staff, projects and job cards. For that project, skip step 1 and instead run `supabase/UPGRADE_EXISTING_PROJECT.sql` in the SQL Editor (it adds quotations, the documents bucket, the workflow and the price list, keeps existing data, and is safe to run twice), then do step 1b. The Vercel keys stay the same.
+
+## 1. Create the project (10 minutes)
+
+1. Go to https://supabase.com/dashboard, then click **New project**. Name it `greenergy-crm` and choose the **Mumbai (ap-south-1)** region. Save the database password somewhere safe.
+2. Open **SQL Editor**, then **New query**. Paste the whole of `supabase/SETUP_NEW_PROJECT.sql` and press **Run**. It should finish with "Success. No rows returned".
+3. Open **Authentication**, then **Sign In / Providers**, and turn **off** "Allow new users to sign up". Staff join through the CRM's Register page and your approval, which sends them an invite.
+4. In **Authentication**, then **URL Configuration**, set:
+   - **Site URL** to `https://greenergy-crm.vercel.app`
+   - **Redirect URLs** to `https://greenergy-crm.vercel.app/auth/callback` and `https://greenergy-crm.vercel.app/staff/reset-password`
+
+## 1b. Load your supplier price list (private)
+
+Quotations are priced from your supplier price list. The list holds your purchase prices and margin, so it is kept out of the code: the GitHub repository is public, and `supabase/pricing/` is git-ignored.
+
+1. On your PC, run `node supabase/build-pricing-seed.mjs`. It reads `supabase/pricing/price-list-2026-11.json` (copied from your three PDF price lists) and `supabase/pricing/cost-model.json` (your margin, size bands, structure and installation rates).
+2. Open the generated `supabase/pricing/pricing_seed.sql`, paste it into the Supabase **SQL Editor** and run it.
+3. From then on, change prices on the CRM's **Price List** page. Every save is versioned. For a new supplier PDF, update the rates there; there is no need to repeat these steps.
+
+**All prices in the price list exclude GST.** Quotations add the margin, then GST (8.9%) once on the final price.
+
+**Letting someone else update prices:** in **User Management**, set that person's **Price list access**:
+- **Supplier prices**: they can update panel, inverter, battery, cable, ACDB/DCDB and shed rates. They cannot change the margin, and they cannot see the profit on individual quotations.
+- **Prices & margin**: they can also change profit %, GST % and the sizing rules.
+- **None** removes the access immediately.
+
+Only the CEO can give or remove this access, and every change on the Price List page records who made it.
+
+## 2. Create your CEO login
+
+1. Go to **Authentication**, then **Users**, then **Add user** and **Create new user**. Enter `kannan.s1987@gmail.com` and a strong password, and tick **Auto Confirm User**.
+2. In **SQL Editor**, run:
+   ```sql
+   update profiles set role = 'admin', status = 'active', full_name = 'Kannan Selvam'
+   where email = 'kannan.s1987@gmail.com';
+   ```
+
+## 3. Point the website at the new project
+
+1. In Supabase, open **Project Settings**, then **API**. Copy the **Project URL**, the **anon public** key and the **service_role** key.
+2. In Vercel, open the **greenergy-crm** project, then **Settings**, then **Environment Variables**. Replace the values of:
+   - `NEXT_PUBLIC_SUPABASE_URL`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   - `SUPABASE_SERVICE_ROLE_KEY` (keep this one secret; it is only used on the server)
+   - `NEXT_PUBLIC_SITE_URL` = `https://greenergy-crm.vercel.app`
+   - `ADMIN_EMAIL` = `kannan.s1987@gmail.com`
+3. Put the same values in `.env.local` for running the CRM on your PC.
+4. Deploy the new code: push it to GitHub (Vercel deploys automatically), or press **Redeploy** in Vercel after pushing.
+
+## 4. Add your team
+
+- Staff open `/staff/register`. You approve them in **User Management**, which sends each one an email invite.
+- Roles:
+
+| CRM role | In the workflow | Can |
+|---|---|---|
+| `admin` | **CEO** | Approve, reject or send back quotations; appoint administrative officers; everything else |
+| `task_manager` | **Admin manager** | Follow up all quotations, reassign, record acceptance, create numbered job cards, update milestones and payments |
+| `employee` | **Sales / field staff** | Create quotations (assigned to themselves), submit for approval, share after approval, follow up, mark hot/cold |
+| `employee` appointed on a project | **Administrative officer** | Update the milestones of the projects the CEO appointed them to |
+
+- Prices come from the **Price List** page (supplier rates, all excluding GST; see step 1b). New quotations are priced from it automatically.
+
+## 5. How the flow works
+
+Quotation (draft) → **Submit for CEO approval** → CEO **Approves**. Prices are then locked; **Revise** sends the quotation back for approval and the old customer link stops working.
+→ **Share with customer & admin manager**. This creates the portal link and WhatsApp/email buttons, and the admin manager gets a notification.
+→ Follow-ups are logged with a next date, and the quotation is marked **Hot** or **Cold**.
+→ The customer presses **Accept** on the portal, or staff record the acceptance.
+→ For a **Hot and accepted** quotation, **Create numbered job card** creates `GSS/JC/2026-27/0001`, the project, 23 milestones from order to end of life, and the 50/40/10 payment schedule.
+→ The CEO appoints the **administrative officer**, who tracks the milestones.
+
+These rules are enforced inside the database (`supabase/workflow_v2.sql`), not only on screen.
+
+## Checking the database rules
+
+`supabase/tests/workflow_v2_test.sql` signs in as each role and checks every rule. Run it only on a throwaway database, never on the live project; see `supabase/tests/README.md`.

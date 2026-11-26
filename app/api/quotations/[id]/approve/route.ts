@@ -7,6 +7,11 @@ import { STATUS_LABELS } from '@/lib/workflow'
 type Action =
   | 'mark_under_review' | 'submit' | 'send_for_approval' | 'approve' | 'send_back' | 'reject' | 'request_more_info'
   | 'share' | 'mark_sent' | 'accept' | 'temperature' | 'lose' | 'revise' | 'reopen'
+  | 'schedule_visit' | 'visit_done'
+
+const PRE_VISIT = ['new', 'sales_review', 'site_details_pending', 'site_visit_scheduled']
+const num = (v: unknown) => (v === '' || v == null || !Number.isFinite(Number(v)) ? undefined : Number(v))
+const pick = <T extends string>(v: unknown, ok: readonly T[]) => (ok.includes(v as T) ? (v as T) : undefined)
 
 const NEEDS_REASON: Action[] = ['send_back', 'reject', 'request_more_info', 'lose', 'accept']
 
@@ -58,6 +63,33 @@ export async function POST(
       if (!t) return NextResponse.json({ error: 'value must be hot or cold.' }, { status: 400 })
       updates = { lead_temperature: t }
       note = `Marked ${t.toUpperCase()}${remarks ? ': ' + remarks : ''}`
+      break
+    }
+    case 'schedule_visit': {
+      const at = typeof body.site_visit_at === 'string' && !Number.isNaN(Date.parse(body.site_visit_at)) ? new Date(body.site_visit_at).toISOString() : null
+      if (!at) return NextResponse.json({ error: 'Choose the date and time of the visit.' }, { status: 400 })
+      if (!PRE_VISIT.includes(current.status)) return NextResponse.json({ error: 'The site visit is already done.' }, { status: 400 })
+      updates = { site_visit_at: at, status: 'site_visit_scheduled' }
+      note = 'Site visit planned for ' + new Date(at).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+        + (remarks ? ' — ' + remarks : '')
+      break
+    }
+    case 'visit_done': {
+      if (!remarks) return NextResponse.json({ error: 'Write what you saw and what the customer wants.' }, { status: 400 })
+      if (!PRE_VISIT.includes(current.status)) return NextResponse.json({ error: 'The site visit is already recorded.' }, { status: 400 })
+      const d = (body.details ?? {}) as Record<string, unknown>
+      const site: Record<string, unknown> = {
+        roof_type: pick(d.roof_type, ['rcc', 'sheet', 'ground_mount', 'other'] as const),
+        current_phase: pick(d.current_phase, ['single', 'three'] as const),
+        available_roof_area_sqft: num(d.available_roof_area_sqft), sanctioned_load_kw: num(d.sanctioned_load_kw),
+        avg_monthly_units: num(d.avg_monthly_units), avg_monthly_bill: num(d.avg_monthly_bill),
+        eb_consumer_number: typeof d.eb_consumer_number === 'string' && d.eb_consumer_number.trim() ? d.eb_consumer_number.trim().slice(0, 40) : undefined,
+      }
+      for (const k of Object.keys(site)) if (site[k] === undefined) delete site[k]
+      const lat = num(body.lat), lng = num(body.lng)
+      updates = { ...site, status: 'site_visit_done', site_visit_done_at: new Date().toISOString(), site_visit_notes: remarks,
+                  ...(lat != null && lng != null ? { site_visit_lat: lat, site_visit_lng: lng } : {}) }
+      note = 'Site visit done: ' + remarks + (lat == null ? ' (no GPS)' : '')
       break
     }
     case 'lose':              updates = { status: 'cancelled', lost_reason: remarks }; note = 'Lost: ' + remarks; break

@@ -55,11 +55,22 @@ export const WITH_CUSTOMER = ['sent_to_customer', 'customer_accepted', 'advance_
 export const isEditable = (status: string) => EDITABLE.includes(status)
 export const isManager = (role?: string | null) => role === 'admin' || role === 'task_manager'
 
-// The seven steps shown on every quotation
+// Before the visit: the site-visit person can schedule and record it
+export const PRE_VISIT = ['new', 'sales_review', 'site_details_pending', 'site_visit_scheduled']
+
+// The three jobs the CEO / admin manager hands out on each enquiry
+export const JOBS = [
+  { key: 'assigned_engineer_id', label: 'Site visit & customer meeting', short: 'Site visit' },
+  { key: 'assigned_sales_id',    label: 'Prepares the quotation',        short: 'Quotation' },
+  { key: 'follow_up_manager_id', label: 'Follows up with the customer',  short: 'Follow-up' },
+] as const
+
+// The steps shown on every quotation
 export const FLOW = [
+  { key: 'visit',   label: 'Site visit' },
   { key: 'prepare', label: 'Quotation' },
   { key: 'ceo',     label: 'CEO approval' },
-  { key: 'share',   label: 'Customer + admin manager' },
+  { key: 'share',   label: 'Shared with customer' },
   { key: 'follow',  label: 'Follow-up · hot / cold' },
   { key: 'accept',  label: 'Customer accepts' },
   { key: 'job',     label: 'Numbered job card' },
@@ -67,37 +78,43 @@ export const FLOW = [
 ] as const
 
 export function flowStep(status: string): number {
-  if (isEditable(status)) return 0
-  return ({ owner_approval_pending: 1, approved: 2, sent_to_customer: 3, customer_accepted: 4, advance_pending: 4,
-            project_created: 5, rejected: 1, cancelled: 3 } as Record<string, number>)[status] ?? 0
+  if (PRE_VISIT.includes(status)) return 0
+  if (isEditable(status)) return 1
+  return ({ owner_approval_pending: 2, approved: 3, sent_to_customer: 4, customer_accepted: 5, advance_pending: 5,
+            project_created: 6, rejected: 2, cancelled: 4 } as Record<string, number>)[status] ?? 0
 }
 
 export interface QuoteForRules {
   status: string
   assigned_sales_id: string | null
+  assigned_engineer_id?: string | null
   follow_up_manager_id?: string | null
   lead_temperature?: string | null
   project_id?: string | null
 }
 
-// Which actions to offer this person at this stage
+// Which actions to offer this person at this stage (the database checks the same)
 // quotationAccess: "Quotations: edit & delete" given by the CEO in User Management
 export function availableActions(q: QuoteForRules, role: Role, uid: string, quotationAccess = false) {
-  const own = q.assigned_sales_id === uid || q.follow_up_manager_id === uid
-  const staffOk = isManager(role) || own || quotationAccess
+  const boss     = isManager(role) || quotationAccess
+  const preparer = boss || q.assigned_sales_id === uid
+  const visitor  = q.assigned_engineer_id === uid
+  const staffOk  = preparer || q.follow_up_manager_id === uid   // preparer or follow-up person
   const s = q.status
   return {
-    edit:            staffOk && isEditable(s),
-    submit:          staffOk && isEditable(s),
+    edit:            preparer && isEditable(s),
+    submit:          preparer && isEditable(s),
+    visit:           (preparer || visitor) && PRE_VISIT.includes(s),
+    schedule:        boss && PRE_VISIT.includes(s),
     approve:         role === 'admin' && s === 'owner_approval_pending',
     sendBack:        role === 'admin' && s === 'owner_approval_pending',
     reject:          role === 'admin' && s === 'owner_approval_pending',
     share:           staffOk && (s === 'approved' || s === 'sent_to_customer'),
     temperature:     staffOk && WITH_CUSTOMER.includes(s),
-    followUp:        staffOk && s !== 'project_created',
+    followUp:        (staffOk || visitor) && s !== 'project_created',
     accept:          staffOk && s === 'sent_to_customer',
     lose:            staffOk && WITH_CUSTOMER.includes(s),
-    revise:          staffOk && ['approved', ...WITH_CUSTOMER].includes(s),
+    revise:          preparer && ['approved', ...WITH_CUSTOMER].includes(s),
     reopen:          isManager(role) && ['cancelled', 'rejected'].includes(s),
     convert:         isManager(role) && ['customer_accepted', 'advance_pending'].includes(s) && !q.project_id,
     reassign:        isManager(role) && s !== 'project_created',

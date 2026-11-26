@@ -6,12 +6,14 @@ import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, CheckCircle, AlertTriangle, Loader2, Zap, Send, Flame, Snowflake, Phone, MessageSquare,
   History, User, FileText, Download, Copy, ExternalLink, RotateCcw, XCircle, ClipboardCheck,
-  Trash2,
+  Trash2, MapPin, CalendarClock,
 } from 'lucide-react'
 import {
   STATUS_LABELS, STATUS_COLORS, FLOW, flowStep, availableActions, convertBlocker, buildPrice, inr,
   REGION_LABELS, GST_NOTE, whatsappLink, suggestNextFollowUp, followUpState, isEditable, ROLE_LABELS, type Role,
+  JOBS, PRE_VISIT,
 } from '@/lib/workflow'
+import { getBestFix, mapLink } from '@/lib/geo'
 import CostingTable, { type Costing } from '@/components/staff/CostingTable'
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
@@ -42,6 +44,8 @@ interface Q {
   assigned_sales_id: string | null; assigned_engineer_id: string | null; follow_up_manager_id: string | null
   assigned_sales: Person | null; assigned_engineer: Person | null; follow_up_manager: Person | null
   eb_bill_url: string | null; roof_photo_url: string | null; notes: string | null; created_at: string
+  site_visit_at: string | null; site_visit_done_at: string | null; site_visit_notes: string | null
+  site_visit_lat: number | null; site_visit_lng: number | null
   line_items: LineItem[]; status_history: History[]; comments: Comment[]; follow_ups: FollowUp[]
   panel_brand: string | null; panel_wp: number | null; panel_count: number | null; inverter_brand: string | null; inverter_label: string | null
   system_phase: number | null; battery_label: string | null; battery_qty: number | null; priced_from_list: boolean; price_list_month: string | null
@@ -58,6 +62,14 @@ const BTN = 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded
 const fmtDate = (s: string | null) => (s ? new Date(s).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—')
 const fmtDay = (s: string | null) => (s ? new Date(s + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—')
 const CONTACT_ICON: Record<string, string> = { call: '📞', whatsapp: '💬', visit: '🏠', email: '✉️', note: '📝' }
+
+// ISO time → value for <input type="datetime-local"> in the phone's own time zone
+function toLocalInput(iso: string) {
+  const d = new Date(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+const fmtWhen = (s: string | null) => (s ? new Date(s).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '—')
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="block"><span className="text-xs font-medium text-slate-600 mb-1 block">{label}</span>{children}</label>
@@ -78,6 +90,8 @@ export default function QuotationDetailClient({ id }: { id: string }) {
   const [dirty, setDirty] = useState(false)
   const [fu, setFu] = useState({ contact_type: 'call', notes: '', temperature: '', next: '' })
   const [comment, setComment] = useState({ text: '', internal: false })
+  const [visit, setVisit] = useState<Record<string, string>>({})
+  const [gpsMsg, setGpsMsg] = useState('')
   const [opts, setOpts] = useState<{ available: boolean; panelBrands?: { DCR: string[]; NonDCR: string[] }; inverterBrands?: { ongrid: string[]; hybrid: string[] } } | null>(null)
   useEffect(() => { fetch('/api/pricing/options').then(r => r.ok ? r.json() : null).then(setOpts).catch(() => {}) }, [])
 
@@ -98,7 +112,14 @@ export default function QuotationDetailClient({ id }: { id: string }) {
         discount: String(data.discount ?? 0), valid_until: data.valid_until ?? '', priority: data.priority ?? 'normal',
         assigned_sales_id: data.assigned_sales_id ?? '', assigned_engineer_id: data.assigned_engineer_id ?? '',
         follow_up_manager_id: data.follow_up_manager_id ?? '',
+        site_visit_at: data.site_visit_at ? toLocalInput(data.site_visit_at) : '',
         panel_brand: data.panel_brand ?? '', inverter_brand: data.inverter_brand ?? '', battery_qty: String(data.battery_qty ?? 1),
+      })
+      setVisit({
+        notes: '', roof_type: data.roof_type ?? '', current_phase: data.current_phase ?? '',
+        available_roof_area_sqft: String(data.available_roof_area_sqft ?? ''), sanctioned_load_kw: String(data.sanctioned_load_kw ?? ''),
+        avg_monthly_units: String(data.avg_monthly_units ?? ''), avg_monthly_bill: String(data.avg_monthly_bill ?? ''),
+        eb_consumer_number: data.eb_consumer_number ?? '',
       })
       setDirty(false)
       setFu(f => ({ ...f, next: suggestNextFollowUp(data.sent_to_customer_at, data.follow_up_count ?? 0) }))
@@ -156,6 +177,32 @@ export default function QuotationDetailClient({ id }: { id: string }) {
     }
   }
 
+  // People: who does the visit, the quotation and the follow-up; plus the visit date
+  async function savePeople() {
+    if (!q) return
+    const r = await call(`/api/quotations/${id}`, 'PATCH', { assigned_sales_id: form.assigned_sales_id, follow_up_manager_id: form.follow_up_manager_id,
+      assigned_engineer_id: form.assigned_engineer_id }, 'assign', 'Work allocated — each person has been notified')
+    const before = q.site_visit_at ? toLocalInput(q.site_visit_at) : ''
+    if (r && form.site_visit_at && form.site_visit_at !== before && PRE_VISIT.includes(q.status)) {
+      await act('schedule_visit', { site_visit_at: new Date(form.site_visit_at).toISOString() }, 'Work allocated and site visit planned')
+    }
+  }
+
+  // Site visit report, with the phone's GPS as proof of the visit
+  async function recordVisit() {
+    if (!visit.notes?.trim()) { show('Write what you saw and what the customer wants.', false); return }
+    setBusy('visit'); setGpsMsg('Getting your GPS location… stand still for a few seconds.')
+    let lat: number | null = null, lng: number | null = null
+    try { const fix = await getBestFix(); lat = fix.latitude; lng = fix.longitude }
+    catch (e) {
+      if (!window.confirm(`${e instanceof Error ? e.message : 'No location.'}
+
+Save the visit without GPS? The CEO will see that the location is missing.`)) { setBusy(null); setGpsMsg(''); return }
+    }
+    setGpsMsg(''); setBusy(null)
+    await act('visit_done', { remarks: visit.notes.trim(), details: visit, lat, lng }, 'Site visit recorded — the quotation preparer has been notified')
+  }
+
   async function removeQuotation() {
     if (!q) return
     const reason = window.prompt(`Delete quotation ${q.quotation_number} for ${q.customer_name}?
@@ -193,7 +240,10 @@ Reason (e.g. duplicate, test, wrong customer):`)
   const total = q.admin_total_cost ?? q.total_cost_before_subsidy
   const custMsg = `Dear ${q.customer_name}, thank you for considering Greenergy Solar Solutions. Your solar quotation ${q.quotation_number} (${kw ?? ''} kW, ${inr(total)} incl. GST) is ready: ${portalUrl}\nYou can view, print and accept it online. For any questions call +91 99432 56109.`
   const mgrMsg = `Follow-up: quotation ${q.quotation_number} for ${q.customer_name} (${q.mobile}), ${kw ?? ''} kW, ${inr(total)}. ${typeof window !== 'undefined' ? window.location.href : ''}`
-  const managers = staff.filter(s => s.role === 'task_manager' || s.role === 'admin')
+  // Admin managers first in the lists (the usual follow-up people), then everyone else
+  const people = [...staff].sort((a, b) => Number(b.role === 'task_manager') - Number(a.role === 'task_manager') || a.full_name.localeCompare(b.full_name))
+  const personOf: Record<string, Person | null> = { assigned_engineer_id: q.assigned_engineer, assigned_sales_id: q.assigned_sales, follow_up_manager_id: q.follow_up_manager }
+  const workMsg = (job: string) => `Hi, you have been given work in the Greenergy CRM: ${job} for ${q.customer_name} (${q.mobile}${q.city ? ', ' + q.city : ''}), ${q.quotation_number}${job.startsWith('Site') && q.site_visit_at ? ', visit on ' + fmtWhen(q.site_visit_at) : ''}. ${typeof window !== 'undefined' ? window.location.href : ''}`
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
@@ -263,9 +313,9 @@ Reason (e.g. duplicate, test, wrong customer):`)
             {can.reject && <button className={`${BTN} bg-red-600 text-white hover:bg-red-700`} disabled={!!busy}
               onClick={() => askAct('reject', 'Reason for rejecting:', 'Rejected')}><XCircle size={12} /> Reject</button>}
             {can.share && <button className={`${BTN} bg-orange-500 text-white hover:bg-orange-600`} disabled={!!busy || (!q.follow_up_manager_id && q.status === 'approved')}
-              title={!q.follow_up_manager_id ? 'Choose the admin manager for follow-up first' : ''}
+              title={!q.follow_up_manager_id ? 'Choose who follows up with the customer first (Work allocation)' : ''}
               onClick={() => act('share', {}, 'Shared — send the link using the buttons below')}>
-              <Send size={12} /> {q.status === 'sent_to_customer' ? 'Re-share link' : 'Share with customer & admin manager'}</button>}
+              <Send size={12} /> {q.status === 'sent_to_customer' ? 'Re-share link' : 'Share with customer'}</button>}
             {can.temperature && <>
               <button className={`${BTN} bg-orange-100 text-orange-700 hover:bg-orange-200`} disabled={!!busy || q.lead_temperature === 'hot'}
                 onClick={() => { const r = window.prompt('Why HOT? (what the customer said)', ''); if (r !== null) act('temperature', { value: 'hot', remarks: r }, 'Marked HOT') }}><Flame size={12} /> Mark hot</button>
@@ -295,6 +345,56 @@ Reason (e.g. duplicate, test, wrong customer):`)
         <div className="flex flex-col lg:flex-row gap-5">
           {/* LEFT */}
           <div className="flex-1 min-w-0 space-y-5">
+            {/* Site visit */}
+            <div className={CARD}>
+              <div className={CARD_HDR}><MapPin size={16} className="text-indigo-600" /><h3 className="font-semibold text-sm">Site visit &amp; customer meeting</h3>
+                <span className="ml-auto text-xs text-slate-500">{q.assigned_engineer ? q.assigned_engineer.full_name : 'Not given to anyone yet'}</span></div>
+              <div className="p-5 space-y-3 text-sm">
+                {q.site_visit_done_at ? (
+                  <div className="bg-indigo-50 rounded-lg p-3 space-y-1">
+                    <p className="font-semibold text-indigo-900">Visit done · {fmtWhen(q.site_visit_done_at)}</p>
+                    {q.site_visit_notes && <p className="text-slate-700 whitespace-pre-line">{q.site_visit_notes}</p>}
+                    <p className="text-xs text-slate-500">
+                      {[q.roof_type && `Roof: ${q.roof_type.toUpperCase().replace('_', ' ')}`, q.available_roof_area_sqft && `${q.available_roof_area_sqft} sq ft`,
+                        q.current_phase && `${q.current_phase} phase`, q.sanctioned_load_kw && `load ${q.sanctioned_load_kw} kW`,
+                        q.avg_monthly_units && `${q.avg_monthly_units} units/month`].filter(Boolean).join(' · ')}
+                    </p>
+                    {q.site_visit_lat != null && q.site_visit_lng != null
+                      ? <a className="text-xs text-green-700 hover:underline" target="_blank" rel="noopener noreferrer" href={mapLink(q.site_visit_lat, q.site_visit_lng)}>📍 Where the visit was recorded</a>
+                      : <p className="text-xs text-amber-700">⚠ Recorded without GPS</p>}
+                  </div>
+                ) : (
+                  <p className="text-slate-600">
+                    {q.site_visit_at ? <>Planned for <b>{fmtWhen(q.site_visit_at)}</b>.</> : 'No visit date yet.'}{' '}
+                    {q.address ? <>Address: {q.address}{q.city ? `, ${q.city}` : ''}. </> : null}
+                    <a className="text-green-700 hover:underline" href={`tel:${q.mobile}`}>Call {q.mobile}</a>
+                  </p>
+                )}
+                {can.visit && (
+                  <div className="border-t border-slate-100 pt-3 space-y-3">
+                    <p className="text-xs font-semibold text-slate-600">Record the visit (do this at the site — your GPS location is saved)</p>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      <Field label="Roof"><select className={INPUT} value={visit.roof_type} onChange={e => setVisit({ ...visit, roof_type: e.target.value })}>
+                        <option value="">—</option><option value="rcc">RCC / concrete</option><option value="sheet">Metal sheet</option><option value="ground_mount">Ground</option><option value="other">Other</option></select></Field>
+                      <Field label="Shadow-free area (sq ft)"><input className={INPUT} type="number" min="0" value={visit.available_roof_area_sqft} onChange={e => setVisit({ ...visit, available_roof_area_sqft: e.target.value })} /></Field>
+                      <Field label="Supply"><select className={INPUT} value={visit.current_phase} onChange={e => setVisit({ ...visit, current_phase: e.target.value })}>
+                        <option value="">—</option><option value="single">Single phase</option><option value="three">Three phase</option></select></Field>
+                      <Field label="Sanctioned load (kW)"><input className={INPUT} type="number" min="0" step="0.1" value={visit.sanctioned_load_kw} onChange={e => setVisit({ ...visit, sanctioned_load_kw: e.target.value })} /></Field>
+                      <Field label="Units per month"><input className={INPUT} type="number" min="0" value={visit.avg_monthly_units} onChange={e => setVisit({ ...visit, avg_monthly_units: e.target.value })} /></Field>
+                      <Field label="Bill per month (₹)"><input className={INPUT} type="number" min="0" value={visit.avg_monthly_bill} onChange={e => setVisit({ ...visit, avg_monthly_bill: e.target.value })} /></Field>
+                      <div className="col-span-2 sm:col-span-3"><Field label="EB consumer no."><input className={INPUT} value={visit.eb_consumer_number} onChange={e => setVisit({ ...visit, eb_consumer_number: e.target.value })} /></Field></div>
+                    </div>
+                    <Field label="What you saw & what the customer wants *"><textarea className={INPUT} rows={3} maxLength={1000} value={visit.notes}
+                      placeholder="e.g. 2-storey house, RCC roof facing south, water tank on the east side. Wants 3 kW with subsidy, budget ₹2 lakh, decision with son next week."
+                      onChange={e => setVisit({ ...visit, notes: e.target.value })} /></Field>
+                    {gpsMsg && <p className="text-xs text-blue-700">{gpsMsg}</p>}
+                    <button className="px-4 py-2 bg-indigo-600 text-white text-sm font-semibold rounded-lg hover:bg-indigo-700 disabled:opacity-50" disabled={!!busy} onClick={recordVisit}>
+                      {busy === 'visit' || busy === 'visit_done' ? <Loader2 size={14} className="animate-spin inline mr-1" /> : <CalendarClock size={14} className="inline mr-1" />}Site visit done</button>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Customer & system (editable while a draft) */}
             <div className={CARD}>
               <div className={CARD_HDR}><User size={16} className="text-green-600" /><h3 className="font-semibold text-sm">Customer &amp; system</h3>
@@ -380,10 +480,10 @@ Reason (e.g. duplicate, test, wrong customer):`)
                     <a className={`${BTN} bg-green-600 text-white`} target="_blank" rel="noopener noreferrer" href={whatsappLink(q.mobile, custMsg)}><MessageSquare size={12} /> WhatsApp customer</a>
                     {q.email && <a className={`${BTN} bg-slate-100 text-slate-700`} href={`mailto:${q.email}?subject=${encodeURIComponent('Your Greenergy solar quotation ' + q.quotation_number)}&body=${encodeURIComponent(custMsg)}`}>Email customer</a>}
                     <a className={`${BTN} bg-green-600 text-white`} target="_blank" rel="noopener noreferrer" href={whatsappLink(q.follow_up_manager?.phone, mgrMsg)}>
-                      <MessageSquare size={12} /> WhatsApp admin manager{q.follow_up_manager ? ` (${q.follow_up_manager.full_name})` : ''}</a>
+                      <MessageSquare size={12} /> WhatsApp follow-up person{q.follow_up_manager ? ` (${q.follow_up_manager.full_name})` : ''}</a>
                     <a className={`${BTN} bg-slate-100 text-slate-700`} target="_blank" rel="noopener noreferrer" href={portalUrl}><ExternalLink size={12} /> Customer view</a>
                   </div>
-                  <p className="text-xs text-slate-400">The admin manager also gets an in-app notification. The customer can view, print and accept on the link.</p>
+                  <p className="text-xs text-slate-400">The follow-up person also gets an in-app notification. The customer can view, print and accept on the link.</p>
                 </div>
               </div>
             )}
@@ -468,18 +568,33 @@ Reason (e.g. duplicate, test, wrong customer):`)
             </div>
 
             <div className={CARD}>
-              <div className={CARD_HDR}><User size={16} className="text-green-600" /><h3 className="font-semibold text-sm">People</h3></div>
+              <div className={CARD_HDR}><User size={16} className="text-green-600" /><h3 className="font-semibold text-sm">Work allocation</h3></div>
               <div className="p-5 space-y-3">
-                {([['assigned_sales_id', 'Prepared by (sales)', staff], ['follow_up_manager_id', 'Admin manager for follow-up', managers], ['assigned_engineer_id', 'Site engineer', staff]] as const).map(([k, label, list]) => (
-                  <Field key={k} label={label}>
-                    <select className={INPUT} disabled={!can.reassign} value={form[k]} onChange={e => set(k, e.target.value)}>
-                      <option value="">— not set —</option>
-                      {list.map(s => <option key={s.id} value={s.id}>{s.full_name}{'role' in s ? ` · ${ROLE_LABELS[s.role as Role] ?? s.role}` : ''}</option>)}
-                    </select>
+                {JOBS.map(j => {
+                  const p = personOf[j.key]
+                  return (
+                    <div key={j.key}>
+                      <Field label={j.label}>
+                        <select className={INPUT} disabled={!can.reassign} value={form[j.key]} onChange={e => set(j.key, e.target.value)}>
+                          <option value="">— not given to anyone —</option>
+                          {people.map(s => <option key={s.id} value={s.id}>{s.full_name} · {ROLE_LABELS[s.role as Role] ?? s.role}</option>)}
+                        </select>
+                      </Field>
+                      {p && p.id !== me.id && (
+                        <a className="text-[11px] text-green-700 hover:underline" target="_blank" rel="noopener noreferrer"
+                          href={whatsappLink(p.phone ?? staff.find(x => x.id === p.id)?.phone, workMsg(j.label))}>WhatsApp {p.full_name.split(' ')[0]} about this</a>
+                      )}
+                    </div>
+                  )
+                })}
+                {PRE_VISIT.includes(q.status) && (
+                  <Field label="Site visit date & time">
+                    <input className={INPUT} type="datetime-local" disabled={!can.reassign} value={form.site_visit_at} onChange={e => set('site_visit_at', e.target.value)} />
                   </Field>
-                ))}
+                )}
                 {can.reassign && <button className="w-full py-2 bg-slate-800 text-white text-sm font-semibold rounded-lg disabled:opacity-50" disabled={!!busy}
-                  onClick={() => call(`/api/quotations/${id}`, 'PATCH', { assigned_sales_id: form.assigned_sales_id, follow_up_manager_id: form.follow_up_manager_id, assigned_engineer_id: form.assigned_engineer_id }, 'assign', 'People updated')}>Update people</button>}
+                  onClick={savePeople}>{busy === 'assign' || busy === 'schedule_visit' ? <Loader2 size={14} className="animate-spin inline mr-1" /> : null}Save &amp; notify</button>}
+                <p className="text-[11px] text-slate-400">Any staff member can do any job, and one person can do several. Each person gets a notification and sees it under Quotations → My work. Only the CEO approves.</p>
               </div>
             </div>
 

@@ -2,16 +2,32 @@ import { createClient } from '@/lib/supabase/server'
 import Header from '@/components/staff/Header'
 import Link from 'next/link'
 import { Plus } from 'lucide-react'
-import { STATUS_LABELS, STATUS_COLORS, WITH_CUSTOMER, followUpState, inr, todayIso, EDITABLE } from '@/lib/workflow'
+import { STATUS_LABELS, STATUS_COLORS, WITH_CUSTOMER, followUpState, inr, todayIso, EDITABLE, PRE_VISIT } from '@/lib/workflow'
 
 interface Row {
   id: string; quotation_number: string; customer_name: string; mobile: string; city: string | null
   status: string; lead_temperature: string | null; next_follow_up_date: string | null; job_number: string | null
   admin_capacity_kw: number | null; recommended_capacity_kw: number | null; admin_total_cost: number | null; total_cost_before_subsidy: number | null
   created_at: string; updated_at: string; assigned_sales: { full_name: string } | null; follow_up_manager: { full_name: string } | null
+  assigned_engineer: { full_name: string } | null
+  assigned_sales_id: string | null; assigned_engineer_id: string | null; follow_up_manager_id: string | null
+  site_visit_at: string | null; site_visit_done_at: string | null
+}
+
+const first = (p: { full_name: string } | null) => p?.full_name.split(' ')[0] ?? '—'
+
+// What this person has to do on this quotation now
+function myTask(r: Row, uid: string): string {
+  if (r.assigned_engineer_id === uid && PRE_VISIT.includes(r.status)) return r.site_visit_at ? 'Site visit ' + new Date(r.site_visit_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : 'Site visit'
+  if (r.assigned_sales_id === uid && EDITABLE.includes(r.status)) return r.status === 'more_info_requested' ? 'Add the information asked' : 'Prepare quotation'
+  if (r.follow_up_manager_id === uid && (r.status === 'approved' || WITH_CUSTOMER.includes(r.status))) return r.status === 'approved' ? 'Share with customer' : 'Follow up'
+  if (r.assigned_sales_id === uid && r.status === 'approved') return 'Share with customer'
+  return ''
 }
 
 const TABS = [
+  { key: 'mine',      label: 'My work' },
+  { key: 'unassigned', label: 'Not allocated' },
   { key: 'followups', label: 'Follow-ups due' },
   { key: 'approvals', label: 'Waiting for CEO' },
   { key: 'drafts',    label: 'Drafts & enquiries' },
@@ -27,17 +43,23 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
   const { data: me } = await supabase.from('profiles').select('role').eq('id', user?.id ?? '').single()
 
   // Row-level security limits staff to their own quotations; managers see all
-  const { data } = await supabase
-    .from('quotation_requests')
-    .select(`id, quotation_number, customer_name, mobile, city, status, lead_temperature, next_follow_up_date, job_number,
+  const COLS = `id, quotation_number, customer_name, mobile, city, status, lead_temperature, next_follow_up_date, job_number,
              admin_capacity_kw, recommended_capacity_kw, admin_total_cost, total_cost_before_subsidy, created_at, updated_at,
-             assigned_sales:assigned_sales_id ( full_name ), follow_up_manager:follow_up_manager_id ( full_name )`)
-    .order('updated_at', { ascending: false })
-    .limit(500)
+             assigned_sales_id, assigned_engineer_id, follow_up_manager_id, site_visit_at, site_visit_done_at,
+             assigned_sales:assigned_sales_id ( full_name ), follow_up_manager:follow_up_manager_id ( full_name ),
+             assigned_engineer:assigned_engineer_id ( full_name )`
+  const run =(c: string) => supabase.from('quotation_requests').select(c).order('updated_at', { ascending: false }).limit(500)
+  let { data, error } = await run(COLS)
+  // Until supabase/quotation_allocation_v1.sql has been run, the site-visit columns do not exist yet
+  if (error) ({ data, error } = await run(COLS.replace('site_visit_at, site_visit_done_at,', '')))
   const all = (data ?? []) as unknown as Row[]
 
   const t = todayIso()
+  const uid = user?.id ?? ''
+  const isMgr = me?.role === 'admin' || me?.role === 'task_manager'
   const lists: Record<string, Row[]> = {
+    mine:       all.filter(r => myTask(r, uid)),
+    unassigned: all.filter(r => !['project_created', 'cancelled', 'rejected'].includes(r.status) && (!r.assigned_sales_id || !r.follow_up_manager_id)),
     followups: all.filter(r => WITH_CUSTOMER.includes(r.status) && r.next_follow_up_date && r.next_follow_up_date <= t)
                   .sort((a, b) => String(a.next_follow_up_date).localeCompare(String(b.next_follow_up_date))),
     approvals: all.filter(r => r.status === 'owner_approval_pending'),
@@ -47,14 +69,17 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
     accepted:  all.filter(r => ['customer_accepted', 'advance_pending'].includes(r.status)),
     all,
   }
-  const view = TABS.some(x => x.key === searchParams.view) ? searchParams.view! : (me?.role === 'admin' && lists.approvals.length ? 'approvals' : 'followups')
+  const view = TABS.some(x => x.key === searchParams.view) ? searchParams.view!
+    : me?.role === 'admin' && lists.approvals.length ? 'approvals'
+    : isMgr && lists.unassigned.length ? 'unassigned'
+    : lists.mine.length ? 'mine' : 'followups'
   const term = (searchParams.q ?? '').trim().toLowerCase()
   const rows = lists[view].filter(r => !term || [r.quotation_number, r.customer_name, r.mobile, r.city, r.job_number]
     .some(x => String(x ?? '').toLowerCase().includes(term)))
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
-      <Header title="Quotations" subtitle="Quotation → CEO approval → customer & admin manager → hot / cold → accepted → numbered job card" />
+      <Header title="Quotations" subtitle="Enquiry → site visit → quotation → CEO approval → customer → follow-up (hot / cold) → accepted → job card" />
       <div className="flex-1 p-4 sm:p-6 max-w-7xl mx-auto w-full space-y-4">
         <div className="flex flex-wrap items-center gap-2">
           <form className="flex-1 min-w-[200px]" action="/staff/quotations">
@@ -68,7 +93,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
         </div>
 
         <nav className="flex gap-1 overflow-x-auto bg-white border border-slate-100 rounded-xl p-1" aria-label="Quotation views">
-          {TABS.filter(x => x.key !== 'approvals' || me?.role !== 'employee').map(tab => (
+          {TABS.filter(x => (x.key !== 'approvals' && x.key !== 'unassigned') || isMgr).map(tab => (
             <Link key={tab.key} href={`/staff/quotations?view=${tab.key}`}
               className={`px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap ${view === tab.key ? 'bg-green-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
               {tab.label} <span className={`ml-1 ${view === tab.key ? 'text-green-100' : 'text-slate-400'}`}>{lists[tab.key].length}</span>
@@ -80,7 +105,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
           {rows.length === 0 ? <p className="text-center py-16 text-slate-400 text-sm">Nothing here.</p> : (
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b border-slate-100 text-xs text-slate-500 uppercase tracking-wide">
-                <tr>{['Quotation', 'Customer', 'kW', 'Total', 'Stage', 'Hot / cold', 'Sales', 'Next follow-up'].map(h => <th key={h} className="text-left px-4 py-3 whitespace-nowrap">{h}</th>)}</tr>
+                <tr>{['Quotation', 'Customer', 'kW', 'Total', 'Stage', view === 'mine' ? 'Your job' : 'Hot / cold', 'Visit · Quote · Follow-up', 'Next follow-up'].map(h => <th key={h} className="text-left px-4 py-3 whitespace-nowrap">{h}</th>)}</tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {rows.map(r => {
@@ -92,8 +117,9 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
                       <td className="px-4 py-3">{r.admin_capacity_kw ?? r.recommended_capacity_kw ?? '—'}</td>
                       <td className="px-4 py-3 whitespace-nowrap">{inr(r.admin_total_cost ?? r.total_cost_before_subsidy)}</td>
                       <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${STATUS_COLORS[r.status] ?? 'bg-slate-100'}`}>{STATUS_LABELS[r.status] ?? r.status}</span></td>
-                      <td className="px-4 py-3">{r.lead_temperature ? <span className={`text-xs font-bold ${r.lead_temperature === 'hot' ? 'text-orange-600' : 'text-sky-600'}`}>{r.lead_temperature === 'hot' ? '🔥 Hot' : '❄ Cold'}</span> : '—'}</td>
-                      <td className="px-4 py-3 text-xs text-slate-600">{r.assigned_sales?.full_name ?? '—'}</td>
+                      {view === 'mine' ? <td className="px-4 py-3 text-xs font-semibold text-indigo-700 whitespace-nowrap">{myTask(r, uid)}</td> :
+                      <td className="px-4 py-3">{r.lead_temperature ? <span className={`text-xs font-bold ${r.lead_temperature === 'hot' ? 'text-orange-600' : 'text-sky-600'}`}>{r.lead_temperature === 'hot' ? '🔥 Hot' : '❄ Cold'}</span> : '—'}</td>}
+                      <td className="px-4 py-3 text-xs text-slate-600 whitespace-nowrap">{first(r.assigned_engineer)}{r.site_visit_done_at ? ' ✓' : ''} · {first(r.assigned_sales)} · {first(r.follow_up_manager)}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-xs">{f ? <span className={f === 'overdue' ? 'text-red-600 font-semibold' : f === 'today' ? 'text-amber-600 font-semibold' : 'text-slate-500'}>
                         {new Date(r.next_follow_up_date + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}{f === 'overdue' ? ' · overdue' : f === 'today' ? ' · today' : ''}</span> : '—'}</td>
                     </tr>

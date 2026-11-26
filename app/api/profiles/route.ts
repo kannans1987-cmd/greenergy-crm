@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
 
   let q = supabase
     .from('profiles')
-    .select('id, full_name, email, role, designation, status')
+    .select('id, full_name, email, phone, role, designation, status')
     .eq('status', 'active')
     .order('full_name', { ascending: true })
 

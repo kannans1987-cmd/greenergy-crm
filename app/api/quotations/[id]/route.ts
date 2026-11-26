@@ -19,7 +19,7 @@ export async function GET(
     .select(`
       *,
       assigned_sales:assigned_sales_id ( id, full_name, email, phone ),
-      assigned_engineer:assigned_engineer_id ( id, full_name, email ),
+      assigned_engineer:assigned_engineer_id ( id, full_name, email, phone ),
       follow_up_manager:follow_up_manager_id ( id, full_name, phone )
     `)
     .eq('id', id)

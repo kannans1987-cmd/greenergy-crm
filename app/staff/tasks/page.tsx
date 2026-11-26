@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format } from 'date-fns'
-import { Plus, CheckCircle, Clock, AlertCircle, ChevronDown } from 'lucide-react'
+import { Plus, CheckCircle, Clock, AlertCircle, ChevronDown, Trash2 } from 'lucide-react'
 
 interface Task {
   id: string
@@ -40,10 +40,11 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 const STATUS_OPTIONS = ['pending', 'in_progress', 'completed', 'review', 'cancelled']
 
-function TaskCard({ task, onUpdate, canEdit }: {
+function TaskCard({ task, onUpdate, canEdit, onDelete }: {
   task: Task
   onUpdate: (id: string, status: string, notes?: string) => void
   canEdit: boolean
+  onDelete?: (task: Task) => void   // CEO only
 }) {
   const [expanded, setExpanded] = useState(false)
   const [notes,    setNotes]    = useState(task.completion_notes ?? '')
@@ -103,8 +104,8 @@ function TaskCard({ task, onUpdate, canEdit }: {
           {task.description && (
             <p className="text-sm text-slate-600">{task.description}</p>
           )}
-          {task.assigner && (
-            <p className="text-xs text-slate-400">Assigned by: {task.assigner.full_name}</p>
+          {(task.assigner || task.assignee) && (
+            <p className="text-xs text-slate-400">{task.assignee ? `Assigned to: ${task.assignee.full_name}` : ''}{task.assignee && task.assigner ? ' · ' : ''}{task.assigner ? `Assigned by: ${task.assigner.full_name}` : ''}</p>
           )}
 
           {canEdit && task.status !== 'cancelled' && (
@@ -150,6 +151,15 @@ function TaskCard({ task, onUpdate, canEdit }: {
               )}
             </>
           )}
+
+          {onDelete && (
+            <div className="pt-2 border-t border-slate-100 flex justify-end">
+              <button onClick={() => onDelete(task)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg text-red-600 border border-red-200 hover:bg-red-50 transition">
+                <Trash2 size={12} /> Delete task
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -172,6 +182,8 @@ export default function TasksPage() {
     project_id: '', priority: 'medium', due_date: '', due_time: '',
   })
   const [creating, setCreating] = useState(false)
+  const [notice,   setNotice]   = useState('')
+  useEffect(() => { if (!notice) return; const t = setTimeout(() => setNotice(''), 4500); return () => clearTimeout(t) }, [notice])
 
   const loadTasks = useCallback(async (uid: string, role: string) => {
     let q = supabase.from('tasks').select(
@@ -215,6 +227,21 @@ export default function TasksPage() {
 
     await supabase.from('tasks').update(updates).eq('id', id)
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status, completion_notes: notes ?? t.completion_notes } : t))
+  }
+
+  // CEO only (the database refuses anyone else); a copy is kept in the audit log
+  const handleDeleteTask = async (task: Task) => {
+    const who = task.assignee ? ` assigned to ${task.assignee.full_name}` : ''
+    if (!window.confirm(`Delete the task "${task.title}"${who}?
+
+This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(task.status) ? ' They will be told it was removed.' : ''}`)) return
+    const { data, error } = await supabase.from('tasks').delete().eq('id', task.id).select('id')
+    if (error || !data?.length) {
+      setNotice(error?.message ?? 'Could not delete. The database update for deleting tasks may not have been run yet (supabase/task_delete_v1.sql).')
+      return
+    }
+    setTasks(prev => prev.filter(t => t.id !== task.id))
+    setNotice(`Task "${task.title}" deleted`)
   }
 
   const handleCreateTask = async (e: React.FormEvent) => {
@@ -351,6 +378,8 @@ export default function TasksPage() {
           </div>
         )}
 
+        {notice && <p role="status" className="text-sm bg-slate-800 text-white rounded-lg px-4 py-2">{notice}</p>}
+
         {/* Task list */}
         <div className="space-y-3">
           {filteredTasks.length === 0 ? (
@@ -363,6 +392,7 @@ export default function TasksPage() {
               task={task}
               onUpdate={handleUpdateTask}
               canEdit={isManager || true}
+              onDelete={profile?.role === 'admin' ? handleDeleteTask : undefined}
             />
           ))}
         </div>

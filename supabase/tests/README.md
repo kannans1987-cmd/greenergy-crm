@@ -23,3 +23,5 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 `job_card_ongoing_v1_test.sql` checks job cards for ongoing projects; it ends with `ALL ONGOING JOB CARD CHECKS PASSED`.
 
 `project_delete_v1_test.sql` checks who may delete a project and what is kept; it ends with `ALL PROJECT DELETE CHECKS PASSED`.
+
+`task_delete_v1_test.sql` checks that only the CEO deletes tasks; it ends with `ALL TASK DELETE CHECKS PASSED`.

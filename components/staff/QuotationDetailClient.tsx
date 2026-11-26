@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
-  ArrowLeft, CheckCircle, AlertTriangle, Loader2, Zap, Send, Flame, Snowflake, Phone, MessageSquare,
+  ArrowLeft, CheckCircle, AlertTriangle, Loader2, Zap, Send, Phone, MessageSquare,
   History, User, FileText, Download, Copy, ExternalLink, RotateCcw, XCircle, ClipboardCheck,
   Trash2, MapPin, CalendarClock,
 } from 'lucide-react'
@@ -15,6 +15,7 @@ import {
 } from '@/lib/workflow'
 import { getBestFix, mapLink } from '@/lib/geo'
 import CostingTable, { type Costing } from '@/components/staff/CostingTable'
+import HotColdPicker from '@/components/staff/HotColdPicker'
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,7 @@ interface Q {
   admin_subsidy: number | null; admin_net_cost: number | null; central_subsidy: number | null; state_subsidy: number | null; state_subsidy_name: string | null
   total_cost_before_subsidy: number | null; net_cost_after_subsidy: number | null
   lead_temperature: string | null; next_follow_up_date: string | null; follow_up_count: number
+  lead_temperature_note?: string | null; lead_temperature_at?: string | null
   valid_until: string | null; admin_remarks: string | null; rejection_reason: string | null; more_info_request: string | null; lost_reason: string | null
   approved_by_name: string | null; approved_at: string | null; sent_to_customer_at: string | null
   accepted_by_name: string | null; accepted_via: string | null; accepted_note: string | null; customer_response_at: string | null
@@ -301,6 +303,13 @@ Reason (e.g. duplicate, test, wrong customer):`)
             </p>
           )}
 
+          {/* Hot / cold: any stage, so follow-ups can be prioritised from the first enquiry */}
+          <div className="flex items-start gap-3 flex-wrap">
+            <span className="text-xs font-semibold text-slate-600 pt-1">Lead:</span>
+            <HotColdPicker id={q.id} value={q.lead_temperature} note={q.lead_temperature_note} since={q.lead_temperature_at}
+              canSet={can.temperature} onDone={() => { show('Hot / cold saved'); load() }} />
+          </div>
+
           <div className="flex flex-wrap gap-2">
             {can.submit && <button className={`${BTN} bg-purple-600 text-white hover:bg-purple-700`} disabled={!!busy}
               onClick={() => (dirty ? saveEdits(true) : act('submit', {}, 'Submitted for CEO approval'))}>
@@ -316,12 +325,6 @@ Reason (e.g. duplicate, test, wrong customer):`)
               title={!q.follow_up_manager_id ? 'Choose who follows up with the customer first (Work allocation)' : ''}
               onClick={() => act('share', {}, 'Shared — send the link using the buttons below')}>
               <Send size={12} /> {q.status === 'sent_to_customer' ? 'Re-share link' : 'Share with customer'}</button>}
-            {can.temperature && <>
-              <button className={`${BTN} bg-orange-100 text-orange-700 hover:bg-orange-200`} disabled={!!busy || q.lead_temperature === 'hot'}
-                onClick={() => { const r = window.prompt('Why HOT? (what the customer said)', ''); if (r !== null) act('temperature', { value: 'hot', remarks: r }, 'Marked HOT') }}><Flame size={12} /> Mark hot</button>
-              <button className={`${BTN} bg-sky-100 text-sky-700 hover:bg-sky-200`} disabled={!!busy || q.lead_temperature === 'cold'}
-                onClick={() => { const r = window.prompt('Why COLD? (what the customer said)', ''); if (r !== null) act('temperature', { value: 'cold', remarks: r }, 'Marked COLD') }}><Snowflake size={12} /> Mark cold</button>
-            </>}
             {can.accept && <button className={`${BTN} bg-emerald-600 text-white hover:bg-emerald-700`} disabled={!!busy}
               onClick={() => { const r = window.prompt('How did the customer accept? (signed copy, WhatsApp message…)'); if (r && r.trim()) act('accept', { remarks: r.trim(), mark_hot: window.confirm('Also mark this quotation HOT? (needed for the job card)') }, 'Acceptance recorded') }}>
               <ClipboardCheck size={12} /> Customer accepted</button>}

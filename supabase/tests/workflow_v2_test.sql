@@ -68,7 +68,6 @@ commit;
 begin; set local role authenticated; select pg_temp.act('00000000-0000-0000-0000-0000000000b1');
 select pg_temp.fails($$update quotation_requests set admin_total_cost = 150000 where id = '10000000-0000-0000-0000-000000000001'$$, 'price change after approval');
 select pg_temp.fails($$insert into quotation_line_items (quotation_id, description, quantity, unit_price) values ('10000000-0000-0000-0000-000000000001', 'Extra', 1, 1)$$, 'line item after approval');
-select pg_temp.fails($$update quotation_requests set lead_temperature = 'hot' where id = '10000000-0000-0000-0000-000000000001'$$, 'hot before sharing');
 select pg_temp.fails($$update quotation_requests set follow_up_manager_id = null where id = '10000000-0000-0000-0000-000000000001'$$, 'sales reassigns');
 update quotation_requests set status = 'sent_to_customer' where id = '10000000-0000-0000-0000-000000000001';
 select pg_temp.ok((select next_follow_up_date = current_date + 1 and sent_to_customer_at is not null from quotation_requests where id = '10000000-0000-0000-0000-000000000001'), 'share sets first follow-up');

@@ -28,7 +28,7 @@ declare
   uid     uuid := auth.uid();
   visitor boolean;
   fu      boolean;
-  allowed text[] := array['updated_at', 'next_follow_up_date', 'follow_up_count', 'lead_temperature'];
+  allowed text[] := array['updated_at', 'next_follow_up_date', 'follow_up_count', 'lead_temperature', 'lead_temperature_note', 'lead_temperature_at'];
   move    text := old.status || '>' || new.status;
 begin
   -- Server, CEO, admin manager, delegated staff and the preparer: the main rules (quotation_guard) apply

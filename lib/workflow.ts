@@ -53,6 +53,9 @@ export const EDITABLE = ['new', 'sales_review', 'site_details_pending', 'site_vi
 export const WITH_CUSTOMER = ['sent_to_customer', 'customer_accepted', 'advance_pending']
 
 export const isEditable = (status: string) => EDITABLE.includes(status)
+// Still being worked on: hot / cold and follow-ups apply
+export const CLOSED = ['project_created', 'cancelled', 'rejected']
+export const isOpen = (status: string) => !CLOSED.includes(status)
 export const isManager = (role?: string | null) => role === 'admin' || role === 'task_manager'
 
 // Before the visit: the site-visit person can schedule and record it
@@ -110,7 +113,7 @@ export function availableActions(q: QuoteForRules, role: Role, uid: string, quot
     sendBack:        role === 'admin' && s === 'owner_approval_pending',
     reject:          role === 'admin' && s === 'owner_approval_pending',
     share:           staffOk && (s === 'approved' || s === 'sent_to_customer'),
-    temperature:     staffOk && WITH_CUSTOMER.includes(s),
+    temperature:     (staffOk || visitor) && isOpen(s),
     followUp:        (staffOk || visitor) && s !== 'project_created',
     accept:          staffOk && s === 'sent_to_customer',
     lose:            staffOk && WITH_CUSTOMER.includes(s),
@@ -187,9 +190,16 @@ export function todayIso() {
 }
 
 export function followUpState(nextDate: string | null | undefined, status: string): '' | 'overdue' | 'today' | 'later' {
-  if (!nextDate || !WITH_CUSTOMER.includes(status)) return ''
+  if (!nextDate || !isOpen(status)) return ''
   const t = todayIso()
   return nextDate < t ? 'overdue' : nextDate === t ? 'today' : 'later'
+}
+
+// Suggested next contact after marking a lead: hot = tomorrow, cold = in a week
+export const TEMP_NEXT_DAYS: Record<string, number> = { hot: 1, cold: 7 }
+export function daysFromToday(n: number) {
+  const d = new Date(); d.setDate(d.getDate() + n)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 export function whatsappLink(phone: string | null | undefined, text: string) {

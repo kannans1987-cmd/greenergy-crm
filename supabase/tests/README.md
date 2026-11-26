@@ -17,3 +17,5 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.
+
+`lead_temperature_v1_test.sql` checks hot / cold at any stage; it ends with `ALL HOT / COLD CHECKS PASSED`.

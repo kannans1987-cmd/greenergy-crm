@@ -59,10 +59,15 @@ export async function POST(
       note = 'Customer accepted: ' + remarks + (body.mark_hot ? ' · marked HOT' : '')
       break
     case 'temperature': {
-      const t = body.value === 'hot' ? 'hot' : body.value === 'cold' ? 'cold' : null
-      if (!t) return NextResponse.json({ error: 'value must be hot or cold.' }, { status: 400 })
-      updates = { lead_temperature: t }
-      note = `Marked ${t.toUpperCase()}${remarks ? ': ' + remarks : ''}`
+      // hot / cold at any open stage; 'none' clears it. Optional next follow-up date.
+      const t = body.value === 'hot' ? 'hot' : body.value === 'cold' ? 'cold' : body.value === 'none' ? null : undefined
+      if (t === undefined) return NextResponse.json({ error: 'value must be hot, cold or none.' }, { status: 400 })
+      if (t === current.lead_temperature && !body.next_follow_up_date) return NextResponse.json({ ok: true })
+      updates = { lead_temperature: t, lead_temperature_note: t ? remarks || null : null }
+      const next = typeof body.next_follow_up_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.next_follow_up_date) ? body.next_follow_up_date : null
+      if (next) updates.next_follow_up_date = next
+      note = (t ? `Marked ${t.toUpperCase()}` : 'Hot / cold cleared') + (remarks ? ': ' + remarks : '')
+        + (next ? ` · next follow-up ${new Date(next + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : '')
       break
     }
     case 'schedule_visit': {

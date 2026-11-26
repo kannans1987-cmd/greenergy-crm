@@ -4,38 +4,107 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format, differenceInMinutes } from 'date-fns'
-import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut } from 'lucide-react'
+import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2 } from 'lucide-react'
 
-interface Project {
-  id: string
-  name: string
-  project_number: string
-}
+// Office staff clock in at the office (GPS must be inside the office radius — the database checks it).
+// Site staff clock in on their project. Managers see everyone's day; the CEO sets the office location.
 
+interface Project { id: string; name: string; project_number: string }
+interface Office { id: string; name: string; lat: number; lng: number; radius_m: number; active: boolean }
 interface AttendanceRecord {
   id: string
+  employee_id: string
   date: string
+  work_type: 'office' | 'site' | null
   clock_in_time: string
   clock_out_time: string | null
   clock_in_address: string | null
-  clock_out_lat: number | null
-  clock_out_lng: number | null
+  clock_in_lat: number | null
+  clock_in_lng: number | null
+  clock_in_distance_m: number | null
+  clock_out_distance_m: number | null
+  is_location_mismatch: boolean | null
   total_hours: number | null
   attendance_status: string
   projects: { name: string } | null
+  office_locations?: { name: string } | null
 }
+interface Staff { id: string; full_name: string; designation: string | null; role: string }
+type Fix = { latitude: number; longitude: number; accuracy: number }
+
+const SELECT = '*,projects(name),office_locations(name)'
 
 function formatHHMM(minutes: number) {
-  const h = Math.floor(minutes / 60)
-  const m = minutes % 60
-  return `${h}h ${m}m`
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+function distanceM(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const r = (d: number) => (d * Math.PI) / 180
+  const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2
+  return 2 * 6371000 * Math.asin(Math.sqrt(h))
+}
+
+const mapLink = (lat: number, lng: number) => `https://www.google.com/maps?q=${lat},${lng}`
+
+/** Watches GPS for up to 12 s and keeps the most accurate reading (indoor readings improve over a few seconds). */
+function getBestFix(): Promise<Fix> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) { reject(new Error('This browser cannot share its location. Please use Chrome on your phone.')); return }
+    let best: Fix | null = null
+    let done = false
+    let watch = 0
+    const finish = () => {
+      if (done) return
+      done = true
+      navigator.geolocation.clearWatch(watch)
+      if (best) resolve(best)
+      else reject(new Error('Could not get your location. Turn on Location (GPS) on the phone and try again.'))
+    }
+    watch = navigator.geolocation.watchPosition(
+      pos => {
+        const f = { latitude: pos.coords.latitude, longitude: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy) }
+        if (!best || f.accuracy < best.accuracy) best = f
+        if (f.accuracy <= 25) finish()
+      },
+      err => {
+        if (done) return
+        if (err.code !== 1 && best) { finish(); return }
+        done = true
+        navigator.geolocation.clearWatch(watch)
+        reject(new Error(err.code === 1
+          ? 'Location permission is blocked. Tap the 🔒 lock icon next to the web address → Permissions / Site settings → Location → Allow, then reload the page.'
+          : 'Could not get your location. Turn on Location (GPS) on the phone and try again.'))
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
+    )
+    setTimeout(finish, 12000)
+  })
+}
+
+async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, { headers: { 'Accept-Language': 'en' } })
+    const data = await res.json()
+    return data.display_name ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+  } catch {
+    return `${lat.toFixed(5)}, ${lng.toFixed(5)}`
+  }
+}
+
+function friendly(msg: string) {
+  if (/attendance_one_per_day|duplicate key/i.test(msg)) return 'You have already clocked in today.'
+  if (/work_type|office_location|clock_in_accuracy|clock_out_accuracy|schema cache/i.test(msg)) return 'The attendance database update has not been run yet. Ask the CEO to run supabase/attendance_v1.sql in Supabase.'
+  return msg
 }
 
 export default function AttendancePage() {
   const supabase = createClient()
 
   const [userId,          setUserId]          = useState<string | null>(null)
+  const [role,            setRole]            = useState<string>('employee')
   const [projects,        setProjects]        = useState<Project[]>([])
+  const [offices,         setOffices]         = useState<Office[]>([])
+  const [workType,        setWorkType]        = useState<'office' | 'site'>('office')
   const [selectedProject, setSelectedProject] = useState('')
   const [todayRecord,     setTodayRecord]     = useState<AttendanceRecord | null>(null)
   const [history,         setHistory]         = useState<AttendanceRecord[]>([])
@@ -45,34 +114,58 @@ export default function AttendancePage() {
   const [statusType,      setStatusType]      = useState<'success'|'error'|'info'>('info')
   const [elapsed,         setElapsed]         = useState('')
 
-  const today = format(new Date(), 'yyyy-MM-dd')
+  // Managers: team view
+  const [teamDate, setTeamDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [staff,    setStaff]    = useState<Staff[]>([])
+  const [teamRows, setTeamRows] = useState<AttendanceRecord[]>([])
 
-  // Live elapsed time counter
+  // CEO: office settings
+  const [officeMsg,  setOfficeMsg]  = useState('')
+  const [officeBusy, setOfficeBusy] = useState(false)
+  const [manual,     setManual]     = useState('')
+
+  const today     = format(new Date(), 'yyyy-MM-dd')
+  const isManager = role === 'admin' || role === 'task_manager'
+  const isCeo     = role === 'admin'
+  const activeOffices = offices.filter(o => o.active)
+
   useEffect(() => {
     if (!todayRecord?.clock_in_time || todayRecord.clock_out_time) return
-    const interval = setInterval(() => {
-      const mins = differenceInMinutes(new Date(), new Date(todayRecord.clock_in_time))
-      setElapsed(formatHHMM(mins))
-    }, 1000)
+    const tick = () => setElapsed(formatHHMM(differenceInMinutes(new Date(), new Date(todayRecord.clock_in_time))))
+    tick()
+    const interval = setInterval(tick, 30000)
     return () => clearInterval(interval)
   }, [todayRecord])
 
+  const loadOffices = useCallback(async () => {
+    const { data } = await supabase.from('office_locations').select('*').order('created_at')
+    setOffices((data as Office[]) ?? [])
+  }, [])
+
   const loadData = useCallback(async (uid: string) => {
-    const [{ data: myProjects }, { data: todayAtt }, { data: hist }] = await Promise.all([
-      supabase.from('project_employees').select('projects(id,name,project_number)')
-        .eq('employee_id', uid).is('released_date', null),
-      supabase.from('attendance').select('*,projects(name)').eq('employee_id', uid).eq('date', today).maybeSingle(),
-      supabase.from('attendance').select('*,projects(name)').eq('employee_id', uid)
-        .order('date', { ascending: false }).limit(10),
+    const [{ data: me }, { data: myProjects }, { data: todayAtt }, { data: hist }] = await Promise.all([
+      supabase.from('profiles').select('role').eq('id', uid).single(),
+      supabase.from('project_employees').select('projects(id,name,project_number)').eq('employee_id', uid).is('released_date', null),
+      supabase.from('attendance').select(SELECT).eq('employee_id', uid).eq('date', today).maybeSingle(),
+      supabase.from('attendance').select(SELECT).eq('employee_id', uid).order('date', { ascending: false }).limit(10),
     ])
-    if (myProjects) {
-      const proj = (myProjects as unknown as { projects: Project | null }[]).map(r => r.projects).filter(Boolean) as Project[]
-      setProjects(proj)
-    }
-    if (todayAtt) setTodayRecord(todayAtt as AttendanceRecord)
-    if (hist)     setHistory(hist as AttendanceRecord[])
+    if (me?.role) setRole(me.role)
+    const proj = ((myProjects ?? []) as unknown as { projects: Project | null }[]).map(r => r.projects).filter(Boolean) as Project[]
+    setProjects(proj)
+    setTodayRecord((todayAtt as AttendanceRecord) ?? null)
+    setHistory((hist as AttendanceRecord[]) ?? [])
+    await loadOffices()
     setPageLoading(false)
-  }, [today])
+  }, [today, loadOffices])
+
+  const loadTeam = useCallback(async (date: string) => {
+    const [{ data: people }, { data: rows }] = await Promise.all([
+      supabase.from('profiles').select('id,full_name,designation,role').eq('status', 'active').order('full_name'),
+      supabase.from('attendance').select(SELECT).eq('date', date),
+    ])
+    setStaff((people as Staff[]) ?? [])
+    setTeamRows((rows as AttendanceRecord[]) ?? [])
+  }, [])
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -82,66 +175,47 @@ export default function AttendancePage() {
     })
   }, [loadData])
 
-  const getLocation = (): Promise<GeolocationCoordinates> =>
-    new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('Geolocation is not supported by your browser'))
-        return
-      }
-      navigator.geolocation.getCurrentPosition(
-        pos => resolve(pos.coords),
-        err => reject(new Error(`Location access denied: ${err.message}`)),
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      )
-    })
+  useEffect(() => { if (isManager) loadTeam(teamDate) }, [isManager, teamDate, loadTeam])
 
-  const reverseGeocode = async (lat: number, lng: number): Promise<string> => {
-    try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`,
-        { headers: { 'Accept-Language': 'en' } }
-      )
-      const data = await res.json()
-      return data.display_name ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
-    } catch {
-      return `${lat.toFixed(5)}, ${lng.toFixed(5)}`
-    }
-  }
+  const say = (msg: string, type: 'success'|'error'|'info') => { setStatus(msg); setStatusType(type) }
 
   const handleClockIn = async () => {
-    if (!selectedProject) {
-      setStatus('Please select a project/site before clocking in.')
-      setStatusType('error')
-      return
+    if (workType === 'site' && !selectedProject) { say('Please select the project / site before clocking in.', 'error'); return }
+    if (workType === 'office' && activeOffices.length === 0) {
+      say('The office location has not been set yet. Ask the CEO to set it (Attendance → Office location).', 'error'); return
     }
     setLoading(true)
-    setStatus('Getting your location…')
-    setStatusType('info')
-
+    say('Getting your GPS location… keep the phone still for a few seconds.', 'info')
     try {
-      const coords  = await getLocation()
-      setStatus('Capturing address…')
-      const address = await reverseGeocode(coords.latitude, coords.longitude)
-      const now     = new Date().toISOString()
-
+      const fix = await getBestFix()
+      if (workType === 'office') {
+        const here = { lat: fix.latitude, lng: fix.longitude }
+        const nearest = activeOffices.map(o => ({ o, d: distanceM(here, o) })).sort((a, b) => a.d - b.d)[0]
+        if (nearest.d > nearest.o.radius_m + Math.min(fix.accuracy, 100)) {
+          throw new Error(`You are about ${Math.round(nearest.d)} m from ${nearest.o.name} (GPS accuracy ±${fix.accuracy} m). Office clock-in works within ${nearest.o.radius_m} m. Go to the office, or stand near a window / outside for a better signal, and try again.`)
+        }
+      }
+      say('Capturing address…', 'info')
+      const address = await reverseGeocode(fix.latitude, fix.longitude)
       const { data, error } = await supabase.from('attendance').insert({
-        employee_id:       userId,
-        project_id:        selectedProject,
-        date:              today,
-        clock_in_time:     now,
-        clock_in_lat:      coords.latitude,
-        clock_in_lng:      coords.longitude,
-        clock_in_address:  address,
-        attendance_status: 'present',
-      }).select('*,projects(name)').single()
-
-      if (error) throw new Error(error.message)
-      setTodayRecord(data as AttendanceRecord)
-      setStatus(`Clocked in at ${format(new Date(now), 'hh:mm a')}`)
-      setStatusType('success')
+        employee_id:         userId,
+        work_type:           workType,
+        project_id:          workType === 'site' ? selectedProject : null,
+        date:                today,
+        clock_in_time:       new Date().toISOString(),
+        clock_in_lat:        fix.latitude,
+        clock_in_lng:        fix.longitude,
+        clock_in_accuracy_m: fix.accuracy,
+        clock_in_address:    address,
+        attendance_status:   'present',
+      }).select(SELECT).single()
+      if (error) throw new Error(friendly(error.message))
+      const rec = data as AttendanceRecord
+      setTodayRecord(rec)
+      say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`, 'success')
+      if (isManager) loadTeam(teamDate)
     } catch (err: unknown) {
-      setStatus(err instanceof Error ? err.message : 'Clock-in failed')
-      setStatusType('error')
+      say(err instanceof Error ? err.message : 'Clock-in failed', 'error')
     } finally {
       setLoading(false)
     }
@@ -149,40 +223,91 @@ export default function AttendancePage() {
 
   const handleClockOut = async () => {
     if (!todayRecord) return
+    if (!window.confirm('Clock out now? You cannot clock in again today.')) return
     setLoading(true)
-    setStatus('Getting your location…')
-    setStatusType('info')
-
+    say('Getting your GPS location…', 'info')
     try {
-      const coords    = await getLocation()
-      const now       = new Date()
-      const totalMins = differenceInMinutes(now, new Date(todayRecord.clock_in_time))
-      const totalHrs  = Math.round((totalMins / 60) * 100) / 100
-      const overtime  = Math.max(0, Math.round(((totalMins - 480) / 60) * 100) / 100)
-
+      let fix: Fix | null = null
+      try { fix = await getBestFix() } catch (e) {
+        if (!window.confirm(`${e instanceof Error ? e.message : 'No location'}\n\nClock out without location? It will be marked for the CEO to check.`)) throw e
+      }
+      const address = fix ? await reverseGeocode(fix.latitude, fix.longitude) : null
       const { data, error } = await supabase.from('attendance').update({
-        clock_out_time: now.toISOString(),
-        clock_out_lat:  coords.latitude,
-        clock_out_lng:  coords.longitude,
-        total_hours:    totalHrs,
-        overtime_hours: overtime,
-      }).eq('id', todayRecord.id).select('*,projects(name)').single()
-
-      if (error) throw new Error(error.message)
-      setTodayRecord(data as AttendanceRecord)
-      setStatus(`Clocked out. Total: ${totalHrs.toFixed(1)} hrs worked.`)
-      setStatusType('success')
+        clock_out_time:       new Date().toISOString(),
+        clock_out_lat:        fix?.latitude ?? null,
+        clock_out_lng:        fix?.longitude ?? null,
+        clock_out_accuracy_m: fix?.accuracy ?? null,
+        clock_out_address:    address,
+      }).eq('id', todayRecord.id).select(SELECT).single()
+      if (error) throw new Error(friendly(error.message))
+      const rec = data as AttendanceRecord
+      setTodayRecord(rec)
+      say(`Clocked out. Total: ${Number(rec.total_hours ?? 0).toFixed(1)} hrs worked.`, 'success')
       loadData(userId!)
+      if (isManager) loadTeam(teamDate)
     } catch (err: unknown) {
-      setStatus(err instanceof Error ? err.message : 'Clock-out failed')
-      setStatusType('error')
+      say(err instanceof Error ? err.message : 'Clock-out failed', 'error')
     } finally {
       setLoading(false)
     }
   }
 
-  const isClockedIn   = !!todayRecord?.clock_in_time && !todayRecord.clock_out_time
-  const isClockedOut  = !!todayRecord?.clock_out_time
+  // ── CEO: office location ──
+  const saveOffice = async (lat: number, lng: number, existing?: Office) => {
+    if (existing) {
+      const { error } = await supabase.from('office_locations').update({ lat, lng, updated_at: new Date().toISOString() }).eq('id', existing.id)
+      if (error) throw new Error(friendly(error.message))
+      setOfficeMsg(`✅ ${existing.name} moved to ${lat.toFixed(6)}, ${lng.toFixed(6)}`)
+    } else {
+      const name = window.prompt('Name of this office:', activeOffices.length ? 'Branch office' : 'Head office')
+      if (!name) { setOfficeMsg(''); return }
+      const { error } = await supabase.from('office_locations').insert({ name, lat, lng, radius_m: 200, created_by: userId })
+      if (error) throw new Error(friendly(error.message))
+      setOfficeMsg(`✅ ${name} saved. Staff can now clock in within 200 m of it.`)
+    }
+    await loadOffices()
+  }
+
+  const officeHere = async (existing?: Office) => {
+    setOfficeBusy(true); setOfficeMsg('Getting your GPS location… stand still for a few seconds.')
+    try {
+      const fix = await getBestFix()
+      if (fix.accuracy > 60 && !window.confirm(`GPS accuracy is only ±${fix.accuracy} m right now. Save anyway? (Standing near a window or just outside the door gives a better reading.)`)) {
+        setOfficeMsg(''); return
+      }
+      await saveOffice(fix.latitude, fix.longitude, existing)
+    } catch (err: unknown) {
+      setOfficeMsg(`❌ ${err instanceof Error ? err.message : 'Failed'}`)
+    } finally { setOfficeBusy(false) }
+  }
+
+  const officeManual = async () => {
+    const m = manual.match(/(-?\d{1,2}\.\d+)\s*,\s*(-?\d{1,3}\.\d+)/)
+    if (!m) { setOfficeMsg('❌ Paste the coordinates like 11.958123, 79.812345 (Google Maps: long-press the office → copy the numbers shown).'); return }
+    setOfficeBusy(true)
+    try { await saveOffice(parseFloat(m[1]), parseFloat(m[2])); setManual('') }
+    catch (err: unknown) { setOfficeMsg(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
+    finally { setOfficeBusy(false) }
+  }
+
+  const setRadius = async (o: Office, radius: number) => {
+    if (!Number.isFinite(radius) || radius < 30 || radius > 5000) { setOfficeMsg('❌ Radius must be between 30 and 5000 metres.'); return }
+    const { error } = await supabase.from('office_locations').update({ radius_m: Math.round(radius), updated_at: new Date().toISOString() }).eq('id', o.id)
+    setOfficeMsg(error ? `❌ ${friendly(error.message)}` : `✅ ${o.name}: clock-in allowed within ${Math.round(radius)} m`)
+    loadOffices()
+  }
+
+  const removeOffice = async (o: Office) => {
+    if (!window.confirm(`Remove ${o.name}? Staff will no longer be able to clock in there.`)) return
+    const { error } = await supabase.from('office_locations').update({ active: false }).eq('id', o.id)
+    setOfficeMsg(error ? `❌ ${friendly(error.message)}` : `${o.name} removed`)
+    loadOffices()
+  }
+
+  const isClockedIn  = !!todayRecord?.clock_in_time && !todayRecord.clock_out_time
+  const isClockedOut = !!todayRecord?.clock_out_time
+  const placeOf = (r: AttendanceRecord) =>
+    r.work_type === 'office' ? `🏢 ${r.office_locations?.name ?? 'Office'}` : (r.projects?.name ?? '—')
 
   if (pageLoading) {
     return (
@@ -192,6 +317,8 @@ export default function AttendancePage() {
     )
   }
 
+  const byEmp = new Map(teamRows.map(r => [r.employee_id, r]))
+
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Header title="Attendance" subtitle="GPS Clock-In / Clock-Out" />
@@ -200,26 +327,18 @@ export default function AttendancePage() {
 
         {/* Clock-in card */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-          {/* Status strip */}
-          <div className={`p-4 flex items-center gap-3 ${
-            isClockedIn  ? 'bg-green-600'  :
-            isClockedOut ? 'bg-slate-700'  : 'bg-amber-500'
-          }`}>
+          <div className={`p-4 flex items-center gap-3 ${isClockedIn ? 'bg-green-600' : isClockedOut ? 'bg-slate-700' : 'bg-amber-500'}`}>
             <MapPin size={20} className="text-white shrink-0" />
             <div>
               <p className="text-white font-semibold text-sm">
-                {isClockedIn
-                  ? `Clocked In — ${elapsed || '…'} elapsed`
-                  : isClockedOut
-                    ? `Day Complete — ${todayRecord?.total_hours?.toFixed(1)} hrs worked`
-                    : 'Not Clocked In Today'}
+                {isClockedIn ? `Clocked In — ${elapsed || '…'} so far`
+                  : isClockedOut ? `Day Complete — ${Number(todayRecord?.total_hours ?? 0).toFixed(1)} hrs worked`
+                  : 'Not Clocked In Today'}
               </p>
               <p className="text-white/70 text-xs">
-                {isClockedIn
-                  ? `Since ${format(new Date(todayRecord!.clock_in_time), 'hh:mm a')}`
-                  : isClockedOut
-                    ? `${format(new Date(todayRecord!.clock_in_time), 'hh:mm a')} → ${format(new Date(todayRecord!.clock_out_time!), 'hh:mm a')}`
-                    : format(new Date(), 'EEEE, dd MMMM yyyy')}
+                {isClockedIn ? `Since ${format(new Date(todayRecord!.clock_in_time), 'hh:mm a')} · ${placeOf(todayRecord!)}`
+                  : isClockedOut ? `${format(new Date(todayRecord!.clock_in_time), 'hh:mm a')} → ${format(new Date(todayRecord!.clock_out_time!), 'hh:mm a')}`
+                  : format(new Date(), 'EEEE, dd MMMM yyyy')}
               </p>
             </div>
           </div>
@@ -227,83 +346,81 @@ export default function AttendancePage() {
           <div className="p-6 space-y-5">
             {!isClockedOut && (
               <>
-                {/* Project selector */}
                 {!isClockedIn && (
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                      Select Project / Site <span className="text-red-500">*</span>
-                    </label>
-                    {projects.length === 0 ? (
-                      <p className="text-sm text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-3">
-                        ⚠ You are not currently assigned to any project. Ask your manager to assign you.
-                      </p>
-                    ) : (
-                      <select
-                        value={selectedProject}
-                        onChange={e => setSelectedProject(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-green-500 bg-white"
-                      >
-                        <option value="">— Choose project/site —</option>
-                        {projects.map(p => (
-                          <option key={p.id} value={p.id}>
-                            {p.project_number} — {p.name}
-                          </option>
+                  <>
+                    <div>
+                      <p className="block text-sm font-medium text-slate-700 mb-1.5">Where are you working today?</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        {([['office', 'At the office', Building2], ['site', 'Project site', HardHat]] as const).map(([v, label, Icon]) => (
+                          <button key={v} type="button" onClick={() => { setWorkType(v); setStatus('') }}
+                            className={`flex items-center justify-center gap-2 py-3 rounded-xl border text-sm font-semibold transition ${
+                              workType === v ? 'border-green-600 bg-green-50 text-green-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                            <Icon size={18} /> {label}
+                          </button>
                         ))}
-                      </select>
+                      </div>
+                    </div>
+
+                    {workType === 'office' ? (
+                      activeOffices.length === 0 ? (
+                        <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
+                          ⚠ The office location has not been set yet. {isCeo ? 'Set it below in “Office location” (do it while you are at the office).' : 'Ask the CEO to set it.'}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded-lg p-3">
+                          You must be at the office to clock in: {activeOffices.map(o => `${o.name} (within ${o.radius_m} m)`).join(', ')}.
+                        </p>
+                      )
+                    ) : (
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1.5">Select Project / Site <span className="text-red-500">*</span></label>
+                        {projects.length === 0 ? (
+                          <p className="text-sm text-amber-600 bg-amber-50 border border-amber-100 rounded-lg p-3">
+                            ⚠ You are not assigned to any project. Choose “At the office”, or ask your manager to assign you.
+                          </p>
+                        ) : (
+                          <select value={selectedProject} onChange={e => setSelectedProject(e.target.value)}
+                            className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                            <option value="">— Choose project/site —</option>
+                            {projects.map(p => <option key={p.id} value={p.id}>{p.project_number} — {p.name}</option>)}
+                          </select>
+                        )}
+                      </div>
                     )}
-                  </div>
+                  </>
                 )}
 
-                {isClockedIn && (
+                {isClockedIn && todayRecord?.clock_in_address && (
                   <div className="bg-green-50 border border-green-100 rounded-xl p-4">
-                    <p className="text-sm text-green-800 font-medium">
-                      Project: {todayRecord?.projects?.name ?? 'Unknown'}
+                    <p className="text-sm text-green-800 font-medium">{placeOf(todayRecord)}</p>
+                    <p className="text-xs text-green-600 mt-1 flex items-start gap-1">
+                      <MapPin size={10} className="mt-0.5 shrink-0" /> {todayRecord.clock_in_address}
                     </p>
-                    {todayRecord?.clock_in_address && (
-                      <p className="text-xs text-green-600 mt-1 flex items-start gap-1">
-                        <MapPin size={10} className="mt-0.5 shrink-0" />
-                        {todayRecord.clock_in_address}
-                      </p>
-                    )}
                   </div>
                 )}
 
-                {/* Status message */}
                 {status && (
-                  <div className={`flex items-center gap-2 p-3 rounded-xl text-sm ${
+                  <div className={`flex items-start gap-2 p-3 rounded-xl text-sm ${
                     statusType === 'success' ? 'bg-green-50 text-green-700 border border-green-100'
                     : statusType === 'error' ? 'bg-red-50 text-red-700 border border-red-100'
-                    : 'bg-blue-50 text-blue-700 border border-blue-100'
-                  }`}>
-                    {statusType === 'success' ? <CheckCircle size={16} />
-                    : statusType === 'error'  ? <AlertTriangle size={16} />
-                    : <Clock size={16} />}
+                    : 'bg-blue-50 text-blue-700 border border-blue-100'}`}>
+                    <span className="mt-0.5 shrink-0">
+                      {statusType === 'success' ? <CheckCircle size={16} /> : statusType === 'error' ? <AlertTriangle size={16} /> : <Clock size={16} />}
+                    </span>
                     {status}
                   </div>
                 )}
 
-                {/* Action button */}
                 <button
                   onClick={isClockedIn ? handleClockOut : handleClockIn}
-                  disabled={loading || (!isClockedIn && !selectedProject)}
+                  disabled={loading || (!isClockedIn && workType === 'site' && !selectedProject) || (!isClockedIn && workType === 'office' && activeOffices.length === 0)}
                   className={`w-full py-4 rounded-xl font-bold text-white text-lg transition-all disabled:opacity-50 flex items-center justify-center gap-3 shadow-lg ${
-                    isClockedIn
-                      ? 'bg-red-500 hover:bg-red-600 shadow-red-200'
-                      : 'bg-green-600 hover:bg-green-700 shadow-green-200'
-                  }`}
-                >
-                  {loading ? (
-                    <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  ) : isClockedIn ? (
-                    <><LogOut size={22} /> Clock Out</>
-                  ) : (
-                    <><LogIn size={22} /> Clock In</>
-                  )}
+                    isClockedIn ? 'bg-red-500 hover:bg-red-600 shadow-red-200' : 'bg-green-600 hover:bg-green-700 shadow-green-200'}`}>
+                  {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    : isClockedIn ? <><LogOut size={22} /> Clock Out</> : <><LogIn size={22} /> Clock In</>}
                 </button>
 
-                <p className="text-xs text-slate-400 text-center">
-                  📍 Your GPS location will be captured when you clock in/out
-                </p>
+                <p className="text-xs text-slate-400 text-center">📍 Your GPS location is recorded when you clock in and out. Allow “Location” when the phone asks.</p>
               </>
             )}
 
@@ -312,44 +429,131 @@ export default function AttendancePage() {
                 <CheckCircle size={40} className="text-green-500 mx-auto mb-3" />
                 <p className="text-slate-800 font-semibold">Great work today!</p>
                 <p className="text-slate-500 text-sm mt-1">
-                  You worked <strong>{todayRecord?.total_hours?.toFixed(1)} hours</strong> on {todayRecord?.projects?.name}
+                  You worked <strong>{Number(todayRecord?.total_hours ?? 0).toFixed(1)} hours</strong> · {placeOf(todayRecord!)}
                 </p>
-                {status && (
-                  <p className="text-green-600 text-sm mt-2">{status}</p>
-                )}
+                {status && <p className="text-green-600 text-sm mt-2">{status}</p>}
               </div>
             )}
           </div>
         </div>
 
-        {/* Attendance History */}
+        {/* Managers: everyone's attendance for a day */}
+        {isManager && (
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
+            <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+                <Users size={16} className="text-green-600" /> Team attendance · {teamRows.length} of {staff.length} clocked in
+              </h3>
+              <input type="date" value={teamDate} max={today} onChange={e => e.target.value && setTeamDate(e.target.value)}
+                aria-label="Day to show" className="text-sm border border-slate-200 rounded-lg px-2 py-1" />
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 border-b border-slate-100">
+                  <tr>{['Name', 'Where', 'In', 'Out', 'Hours', ''].map(h => (
+                    <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>))}</tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {staff.map(p => {
+                    const r = byEmp.get(p.id)
+                    return (
+                      <tr key={p.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-slate-800">{p.full_name}</p>
+                          {p.designation && <p className="text-xs text-slate-400">{p.designation}</p>}
+                        </td>
+                        {r ? (<>
+                          <td className="px-4 py-3 text-slate-600">
+                            {placeOf(r)}
+                            {r.work_type === 'office' && r.clock_in_distance_m != null && <span className="block text-xs text-slate-400">{r.clock_in_distance_m} m from office</span>}
+                          </td>
+                          <td className="px-4 py-3 text-slate-600">{format(new Date(r.clock_in_time), 'hh:mm a')}</td>
+                          <td className="px-4 py-3 text-slate-600">
+                            {r.clock_out_time ? format(new Date(r.clock_out_time), 'hh:mm a') : <span className="text-amber-500 text-xs">Working…</span>}
+                            {r.is_location_mismatch && <span className="block text-xs text-red-500">⚠ clocked out {r.clock_out_distance_m != null ? `${r.clock_out_distance_m} m away` : 'away from the office'}</span>}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-slate-800">{r.total_hours != null ? `${Number(r.total_hours).toFixed(1)}h` : '—'}</td>
+                          <td className="px-4 py-3">
+                            {r.clock_in_lat != null && r.clock_in_lng != null && (
+                              <a href={mapLink(r.clock_in_lat, r.clock_in_lng)} target="_blank" rel="noreferrer" className="text-xs text-green-700 hover:underline">Map</a>)}
+                          </td>
+                        </>) : (
+                          <td colSpan={5} className="px-4 py-3 text-xs text-slate-400">Not clocked in</td>
+                        )}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* CEO: office location */}
+        {isCeo && (
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5 space-y-4">
+            <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+              <Settings size={16} className="text-green-600" /> Office location
+            </h3>
+            {activeOffices.length === 0 && (
+              <p className="text-sm text-slate-600">Stand inside the office with your phone and press <b>Set office location here</b>. Staff can then clock in within the radius.</p>
+            )}
+            {activeOffices.map(o => (
+              <div key={o.id} className="border border-slate-100 rounded-xl p-3 flex flex-wrap items-center gap-3 justify-between">
+                <div>
+                  <p className="font-medium text-slate-800 text-sm">{o.name}</p>
+                  <a href={mapLink(o.lat, o.lng)} target="_blank" rel="noreferrer" className="text-xs text-green-700 hover:underline">
+                    {o.lat.toFixed(6)}, {o.lng.toFixed(6)} · view on map</a>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <label className="text-xs text-slate-500" htmlFor={`r-${o.id}`}>Radius (m)</label>
+                  <input id={`r-${o.id}`} type="number" defaultValue={o.radius_m} min={30} max={5000} step={10}
+                    onBlur={e => { const v = Number(e.target.value); if (v !== o.radius_m) setRadius(o, v) }}
+                    className="w-20 border border-slate-200 rounded-lg px-2 py-1" />
+                  <button onClick={() => officeHere(o)} disabled={officeBusy}
+                    className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Move to where I am</button>
+                  <button onClick={() => removeOffice(o)} aria-label={`Remove ${o.name}`} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={14} /></button>
+                </div>
+              </div>
+            ))}
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => officeHere()} disabled={officeBusy}
+                className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2">
+                <MapPin size={14} /> {activeOffices.length ? 'Add another office here' : 'Set office location here'}
+              </button>
+              <input value={manual} onChange={e => setManual(e.target.value)} placeholder="or paste coordinates, e.g. 11.958123, 79.812345"
+                aria-label="Office coordinates" className="flex-1 min-w-[220px] text-sm border border-slate-200 rounded-lg px-3 py-2" />
+              <button onClick={officeManual} disabled={officeBusy || !manual}
+                className="px-4 py-2 text-sm border border-slate-200 rounded-lg hover:bg-slate-50 disabled:opacity-50">Save coordinates</button>
+            </div>
+            {officeMsg && <p className="text-sm text-slate-700">{officeMsg}</p>}
+            <p className="text-xs text-slate-400">Indoors, phone GPS can be 20–80 m off, so 150–250 m is a sensible radius. The distance check is done on the server, and clock-in / clock-out times are the server’s clock, not the phone’s.</p>
+          </div>
+        )}
+
+        {/* My history */}
         <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
           <div className="px-5 py-4 border-b border-slate-100">
             <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
-              <Clock size={16} className="text-green-600" /> Recent Attendance
+              <Clock size={16} className="text-green-600" /> My recent attendance
             </h3>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 border-b border-slate-100">
-                <tr>
-                  {['Date', 'Project', 'Clock In', 'Clock Out', 'Hours'].map(h => (
-                    <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>
-                  ))}
-                </tr>
+                <tr>{['Date', 'Where', 'Clock In', 'Clock Out', 'Hours'].map(h => (
+                  <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">{h}</th>))}</tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {history.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="text-center py-8 text-slate-400 text-sm">No attendance records yet</td>
-                  </tr>
+                  <tr><td colSpan={5} className="text-center py-8 text-slate-400 text-sm">No attendance records yet</td></tr>
                 ) : history.map(rec => (
                   <tr key={rec.id} className="hover:bg-slate-50 transition">
                     <td className="px-4 py-3 font-medium text-slate-800">{format(new Date(rec.date), 'dd MMM yyyy')}</td>
-                    <td className="px-4 py-3 text-slate-600 truncate max-w-[120px]">{rec.projects?.name ?? '—'}</td>
+                    <td className="px-4 py-3 text-slate-600 truncate max-w-[160px]">{placeOf(rec)}</td>
                     <td className="px-4 py-3 text-slate-600">{rec.clock_in_time ? format(new Date(rec.clock_in_time), 'hh:mm a') : '—'}</td>
                     <td className="px-4 py-3 text-slate-600">{rec.clock_out_time ? format(new Date(rec.clock_out_time), 'hh:mm a') : <span className="text-amber-500 text-xs">In progress…</span>}</td>
-                    <td className="px-4 py-3 font-semibold text-slate-800">{rec.total_hours != null ? `${rec.total_hours.toFixed(1)}h` : '—'}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-800">{rec.total_hours != null ? `${Number(rec.total_hours).toFixed(1)}h` : '—'}</td>
                   </tr>
                 ))}
               </tbody>

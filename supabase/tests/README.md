@@ -13,3 +13,5 @@ The last line printed is `ALL WORKFLOW CHECKS PASSED`. Any broken rule stops the
 After editing any part file, rebuild the combined script with `node supabase/build-setup.mjs`.
 
 `quotation_access_v1_test.sql` checks who may edit and delete quotations; it ends with `ALL QUOTATION ACCESS CHECKS PASSED`.
+
+`attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.

@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
   const employee_id = url.searchParams.get('employee_id')
 
   let q = supabase.from('attendance')
-    .select('*,projects(name,site_address),employee:employee_id(full_name)')
+    .select('*,projects(name,site_address),office_locations(name),employee:employee_id(full_name)')
     .order('date', { ascending: false })
 
   if (profile?.role === 'employee') {
@@ -33,13 +33,15 @@ export async function POST(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await req.json()
-  const { project_id, clock_in_lat, clock_in_lng, clock_in_address } = body
+  const { project_id, clock_in_lat, clock_in_lng, clock_in_address, clock_in_accuracy_m } = body
+  const work_type = body.work_type === 'office' ? 'office' : 'site'
 
   if (!clock_in_lat || !clock_in_lng) {
     return NextResponse.json({ error: 'GPS coordinates are required for clock-in.' }, { status: 400 })
   }
 
-  const today = new Date().toISOString().split('T')[0]
+  // India date; the database sets the final date and time itself and checks the office distance
+  const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().split('T')[0]
 
   // Check if already clocked in today
   const { data: existing } = await supabase.from('attendance')
@@ -51,16 +53,18 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await supabase.from('attendance').insert({
     employee_id:      user.id,
-    project_id:       project_id || null,
+    work_type,
+    project_id:       work_type === 'site' ? (project_id || null) : null,
+    clock_in_accuracy_m: clock_in_accuracy_m ?? null,
     date:             today,
     clock_in_time:    new Date().toISOString(),
     clock_in_lat,
     clock_in_lng,
     clock_in_address: clock_in_address || null,
     attendance_status:'present',
-  }).select('*,projects(name)').single()
+  }).select('*,projects(name),office_locations(name)').single()
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
   return NextResponse.json(data, { status: 201 })
 }
 
@@ -70,7 +74,7 @@ export async function PATCH(req: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await req.json()
-  const { id, clock_out_lat, clock_out_lng, remarks } = body
+  const { id, clock_out_lat, clock_out_lng, clock_out_accuracy_m, remarks } = body
 
   if (!id) return NextResponse.json({ error: 'Attendance id required.' }, { status: 400 })
 
@@ -88,6 +92,7 @@ export async function PATCH(req: NextRequest) {
     clock_out_time: now.toISOString(),
     clock_out_lat:  clock_out_lat  ?? null,
     clock_out_lng:  clock_out_lng  ?? null,
+    clock_out_accuracy_m: clock_out_accuracy_m ?? null,
     total_hours:    totalHrs,
     overtime_hours: overtime,
     remarks:        remarks ?? null,

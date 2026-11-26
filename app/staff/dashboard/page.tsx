@@ -165,7 +165,7 @@ export default function EmployeeDashboard() {
                     : 'Not clocked in today'}
               </p>
               <p className={`text-xs ${isClockedIn ? 'text-green-600' : 'text-amber-600'}`}>
-                {isClockedIn ? 'Your attendance is being tracked' : 'Remember to clock in when you reach the site'}
+                {isClockedIn ? 'Your attendance is being tracked' : 'Remember to clock in when you reach the office or site'}
               </p>
             </div>
           </div>

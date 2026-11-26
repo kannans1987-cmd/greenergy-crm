@@ -11,7 +11,7 @@ async function getStats() {
   const [
     { count: totalEmployees },
     { count: activeProjects },
-    { count: todayClockIns },
+    { data: todayAttRows },
     { count: pendingTasks },
     { count: pendingRegs },
     { data: monthHoursData },
@@ -19,7 +19,7 @@ async function getStats() {
   ] = await Promise.all([
     supabase.from('profiles').select('*', { count: 'exact', head: true }).eq('status','active').neq('role','admin'),
     supabase.from('projects').select('*', { count: 'exact', head: true }).eq('status','in_progress'),
-    supabase.from('attendance').select('*', { count: 'exact', head: true }).eq('date', today).not('clock_in_time','is',null),
+    supabase.from('attendance').select('employee_id').eq('date', today).not('clock_in_time','is',null),
     supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('status','pending'),
     supabase.from('employee_registrations').select('*', { count: 'exact', head: true }).eq('status','pending'),
     supabase.from('attendance').select('total_hours').gte('date', monthStart).not('total_hours','is',null),
@@ -34,7 +34,8 @@ async function getStats() {
   return {
     totalEmployees:  totalEmployees  ?? 0,
     activeProjects:  activeProjects  ?? 0,
-    todayClockIns:   todayClockIns   ?? 0,
+    // people, not sessions (site / O&M staff may clock in several times a day)
+    todayClockIns:   new Set((todayAttRows ?? []).map((r: { employee_id: string }) => r.employee_id)).size,
     pendingTasks:    pendingTasks    ?? 0,
     pendingRegs:     pendingRegs     ?? 0,
     totalMonthHours: Math.round(totalMonthHours),

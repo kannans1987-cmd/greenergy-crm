@@ -85,6 +85,7 @@ export default function EmployeeDashboard() {
   const [profile,     setProfile]     = useState<{ full_name: string } | null>(null)
   const [tasks,       setTasks]       = useState<Task[]>([])
   const [attendance,  setAttendance]  = useState<AttendanceRecord | null>(null)
+  const [todayHours,  setTodayHours]  = useState(0)
   const [isCeo,       setIsCeo]       = useState(false)   // the CEO does not clock in
   const [jobCards,    setJobCards]    = useState<JobCard[]>([])
   const [monthHours,  setMonthHours]  = useState(0)
@@ -109,7 +110,7 @@ export default function EmployeeDashboard() {
         supabase.from('tasks').select('id,title,priority,status,due_date,projects(name)')
           .eq('assigned_to', user.id).neq('status', 'completed').neq('status', 'cancelled')
           .order('due_date', { ascending: true }).limit(5),
-        supabase.from('attendance').select('*').eq('employee_id', user.id).eq('date', today).maybeSingle(),
+        supabase.from('attendance').select('*').eq('employee_id', user.id).eq('date', today).order('clock_in_time'),
         supabase.from('job_cards').select('id,job_card_number,total_manhours,status,projects(name)')
           .eq('employee_id', user.id).eq('status', 'active').limit(3),
         supabase.from('attendance').select('total_hours')
@@ -119,7 +120,12 @@ export default function EmployeeDashboard() {
 
       if (prof)        { setProfile(prof as unknown as { full_name: string }); setIsCeo((prof as { role?: string }).role === 'admin') }
       if (todayTasks)  setTasks(todayTasks as unknown as Task[])
-      if (todayAtt)    setAttendance(todayAtt as unknown as AttendanceRecord)
+      if (todayAtt) {
+        // Site / O&M staff can have several sessions a day: show the open one, else the last one
+        const rs = todayAtt as unknown as AttendanceRecord[]
+        setAttendance(rs.find(r => r.clock_in_time && !r.clock_out_time) ?? rs[rs.length - 1] ?? null)
+        setTodayHours(rs.reduce((t, r) => t + Number(r.total_hours ?? 0), 0))
+      }
       if (cards)       setJobCards(cards as unknown as JobCard[])
       if (attMonth) {
         const total = (attMonth as { total_hours: number | null }[])
@@ -163,7 +169,7 @@ export default function EmployeeDashboard() {
                 {isClockedIn
                   ? `Clocked in at ${format(new Date(attendance!.clock_in_time), 'hh:mm a')}`
                   : attendance?.clock_out_time
-                    ? `Clocked out — ${attendance.total_hours?.toFixed(1)} hrs worked`
+                    ? `Clocked out — ${todayHours.toFixed(1)} hrs worked today`
                     : 'Not clocked in today'}
               </p>
               <p className={`text-xs ${isClockedIn ? 'text-green-600' : 'text-amber-600'}`}>

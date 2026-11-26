@@ -25,3 +25,5 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 `project_delete_v1_test.sql` checks who may delete a project and what is kept; it ends with `ALL PROJECT DELETE CHECKS PASSED`.
 
 `task_delete_v1_test.sql` checks that only the CEO deletes tasks; it ends with `ALL TASK DELETE CHECKS PASSED`.
+
+`attendance_multi_v1_test.sql` checks several clock-ins a day for site / O&M staff and once a day for office staff; it ends with `ALL MULTI-SESSION ATTENDANCE CHECKS PASSED`.

@@ -65,10 +65,14 @@ async function getReportData() {
 
   // Attendance summaries
   const buildAttSummary = (attRows: AttRow[], emps: Emp[]): AttendanceSummary[] => {
+    // Days = distinct dates (site / O&M staff can have several sessions on one day)
     const map = new Map<string, { days: number; hours: number }>()
+    const seen = new Set<string>()
     for (const r of attRows) {
       const prev = map.get(r.employee_id) ?? { days: 0, hours: 0 }
-      map.set(r.employee_id, { days: prev.days + 1, hours: prev.hours + r.total_hours })
+      const key = r.employee_id + '|' + r.date
+      map.set(r.employee_id, { days: prev.days + (seen.has(key) ? 0 : 1), hours: prev.hours + Number(r.total_hours) })
+      seen.add(key)
     }
     return emps.map(e => {
       const s = map.get(e.id) ?? { days: 0, hours: 0 }

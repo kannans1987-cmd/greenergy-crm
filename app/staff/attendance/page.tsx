@@ -16,6 +16,7 @@ interface AttendanceRecord {
   id: string
   employee_id: string
   date: string
+  session_no?: number | null
   work_type: 'office' | 'site' | null
   clock_in_time: string
   clock_out_time: string | null
@@ -30,7 +31,8 @@ interface AttendanceRecord {
   projects: { name: string } | null
   office_locations?: { name: string } | null
 }
-interface Staff { id: string; full_name: string; designation: string | null; role: string }
+interface Staff { id: string; full_name: string; designation: string | null; role: string; attendance_mode?: 'office' | 'field' | null }
+type Mode = 'office' | 'field'
 
 const SELECT = '*,projects(name),office_locations(name)'
 
@@ -57,7 +59,7 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
 }
 
 function friendly(msg: string) {
-  if (/attendance_one_per_day|duplicate key/i.test(msg)) return 'You have already clocked in today.'
+  if (/attendance_one_per_day|attendance_session_per_day|duplicate key/i.test(msg)) return 'You have already clocked in. Refresh the page.'
   if (/work_type|office_location|clock_in_accuracy|clock_out_accuracy|trusted_devices|attendance_clock|register_attendance|schema cache|Could not find the function/i.test(msg))
     return 'The attendance database update has not been run yet. Ask the CEO to run supabase/attendance_devices_v1.sql in Supabase.'
   return msg
@@ -120,7 +122,8 @@ export default function AttendancePage() {
   const [offices,         setOffices]         = useState<Office[]>([])
   const [workType,        setWorkType]        = useState<'office' | 'site'>('office')
   const [selectedProject, setSelectedProject] = useState('')
-  const [todayRecord,     setTodayRecord]     = useState<AttendanceRecord | null>(null)
+  const [todayRecs,       setTodayRecs]       = useState<AttendanceRecord[]>([])
+  const [mode,            setMode]            = useState<Mode>('office')
   const [history,         setHistory]         = useState<AttendanceRecord[]>([])
   const [loading,         setLoading]         = useState(false)
   const [pageLoading,     setPageLoading]     = useState(true)
@@ -132,6 +135,7 @@ export default function AttendancePage() {
   const [teamDate, setTeamDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [staff,    setStaff]    = useState<Staff[]>([])
   const [teamRows, setTeamRows] = useState<AttendanceRecord[]>([])
+  const [modeMsg,  setModeMsg]  = useState('')
 
   // CEO: office settings
   const [officeMsg,  setOfficeMsg]  = useState('')
@@ -200,6 +204,13 @@ export default function AttendancePage() {
     if (userId) loadDevices(userId, true)
   }
 
+  // Today's sessions (office staff: at most one; site / O&M staff: one per visit)
+  const openRec     = todayRecs.find(r => r.clock_in_time && !r.clock_out_time) ?? null
+  const lastRec     = todayRecs[todayRecs.length - 1] ?? null
+  const todayRecord = openRec ?? lastRec
+  const todayHours  = todayRecs.reduce((t, r) => t + Number(r.total_hours ?? 0), 0)
+  const multi       = mode === 'field'
+
   useEffect(() => {
     if (!todayRecord?.clock_in_time || todayRecord.clock_out_time) return
     const tick = () => setElapsed(formatHHMM(differenceInMinutes(new Date(), new Date(todayRecord.clock_in_time))))
@@ -215,16 +226,19 @@ export default function AttendancePage() {
 
   const loadData = useCallback(async (uid: string) => {
     const [{ data: me }, { data: myProjects }, { data: todayAtt }, { data: hist }] = await Promise.all([
-      supabase.from('profiles').select('role').eq('id', uid).single(),
+      supabase.from('profiles').select('*').eq('id', uid).single(),
       supabase.from('project_employees').select('projects(id,name,project_number)').eq('employee_id', uid).is('released_date', null),
-      supabase.from('attendance').select(SELECT).eq('employee_id', uid).eq('date', today).maybeSingle(),
-      supabase.from('attendance').select(SELECT).eq('employee_id', uid).order('date', { ascending: false }).limit(10),
+      supabase.from('attendance').select(SELECT).eq('employee_id', uid).eq('date', today).order('clock_in_time'),
+      supabase.from('attendance').select(SELECT).eq('employee_id', uid).order('date', { ascending: false }).order('clock_in_time', { ascending: false }).limit(20),
     ])
     if (me?.role) setRole(me.role)
+    const m: Mode = me?.attendance_mode === 'field' ? 'field' : 'office'
+    setMode(m)
+    if (m === 'field') setWorkType(w => w === 'office' ? 'site' : w)
     loadDevices(uid, me?.role === 'admin')
     const proj = ((myProjects ?? []) as unknown as { projects: Project | null }[]).map(r => r.projects).filter(Boolean) as Project[]
     setProjects(proj)
-    setTodayRecord((todayAtt as AttendanceRecord) ?? null)
+    setTodayRecs((todayAtt as AttendanceRecord[]) ?? [])
     setHistory((hist as AttendanceRecord[]) ?? [])
     await loadOffices()
     setPageLoading(false)
@@ -232,8 +246,8 @@ export default function AttendancePage() {
 
   const loadTeam = useCallback(async (date: string) => {
     const [{ data: people }, { data: rows }] = await Promise.all([
-      supabase.from('profiles').select('id,full_name,designation,role').eq('status', 'active').neq('role', 'admin').order('full_name'),
-      supabase.from('attendance').select(SELECT).eq('date', date),
+      supabase.from('profiles').select('*').eq('status', 'active').neq('role', 'admin').order('full_name'),
+      supabase.from('attendance').select(SELECT).eq('date', date).order('clock_in_time'),
     ])
     setStaff((people as Staff[]) ?? [])
     setTeamRows((rows as AttendanceRecord[]) ?? [])
@@ -282,8 +296,8 @@ export default function AttendancePage() {
       if (error) throw new Error(friendly(error.message))
       const { data } = await supabase.from('attendance').select(SELECT).eq('id', newId as string).single()
       const rec = data as AttendanceRecord
-      setTodayRecord(rec)
-      say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`, 'success')
+      setTodayRecs(rs => [...rs.filter(r => r.id !== rec.id), rec])
+      say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${multi && (rec.session_no ?? 1) > 1 ? ` (session ${rec.session_no})` : ''}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`, 'success')
       if (isManager) loadTeam(teamDate)
     } catch (err: unknown) {
       say(err instanceof Error ? err.message : 'Clock-in failed', 'error')
@@ -293,8 +307,10 @@ export default function AttendancePage() {
   }
 
   const handleClockOut = async () => {
-    if (!todayRecord) return
-    if (!window.confirm('Clock out now? You cannot clock in again today.')) return
+    if (!openRec) return
+    if (!window.confirm(multi
+      ? 'Clock out of this session? You can clock in again when you reach the next site.'
+      : 'Clock out now? You cannot clock in again today.')) return
     setLoading(true)
     say('Getting your GPS location…', 'info')
     try {
@@ -314,8 +330,10 @@ export default function AttendancePage() {
       if (error) throw new Error(friendly(error.message))
       const { data } = await supabase.from('attendance').select(SELECT).eq('id', recId as string).single()
       const rec = data as AttendanceRecord
-      setTodayRecord(rec)
-      say(`Clocked out. Total: ${Number(rec.total_hours ?? 0).toFixed(1)} hrs worked.`, 'success')
+      setTodayRecs(rs => rs.map(r => r.id === rec.id ? rec : r))
+      say(multi
+        ? `Clocked out. This session: ${Number(rec.total_hours ?? 0).toFixed(1)} hrs. Clock in again at the next site.`
+        : `Clocked out. Total: ${Number(rec.total_hours ?? 0).toFixed(1)} hrs worked.`, 'success')
       loadData(userId!)
       if (isManager) loadTeam(teamDate)
     } catch (err: unknown) {
@@ -323,6 +341,15 @@ export default function AttendancePage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // ── CEO: attendance type per person ──
+  const changeMode = async (p: Staff, m: Mode) => {
+    const { error } = await supabase.from('profiles').update({ attendance_mode: m }).eq('id', p.id)
+    if (error) setModeMsg(/attendance_mode|schema cache/i.test(error.message)
+      ? '❌ The database update for site / O&M attendance has not been run yet (supabase/attendance_multi_v1.sql).' : `❌ ${error.message}`)
+    else setModeMsg(`✅ ${p.full_name}: ${m === 'field' ? 'can clock in and out several times a day' : 'clocks in once a day'}`)
+    loadTeam(teamDate)
   }
 
   // ── CEO: office location ──
@@ -377,8 +404,9 @@ export default function AttendancePage() {
     loadOffices()
   }
 
-  const isClockedIn  = !!todayRecord?.clock_in_time && !todayRecord.clock_out_time
-  const isClockedOut = !!todayRecord?.clock_out_time
+  const isClockedIn  = !!openRec
+  // Office staff: the day is complete after one clock-out. Site / O&M staff can start another session.
+  const isClockedOut = !openRec && !multi && !!lastRec?.clock_out_time
   const placeOf = (r: AttendanceRecord) =>
     r.work_type === 'office' ? `🏢 ${r.office_locations?.name ?? 'Office'}` : (r.projects?.name ?? '—')
 
@@ -390,7 +418,9 @@ export default function AttendancePage() {
     )
   }
 
-  const byEmp = new Map(teamRows.map(r => [r.employee_id, r]))
+  const byEmp = new Map<string, AttendanceRecord[]>()
+  for (const r of teamRows) byEmp.set(r.employee_id, [...(byEmp.get(r.employee_id) ?? []), r])
+  const fmtT = (t: string) => format(new Date(t), 'hh:mm a')
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
@@ -438,13 +468,15 @@ export default function AttendancePage() {
             <MapPin size={20} className="text-white shrink-0" />
             <div>
               <p className="text-white font-semibold text-sm">
-                {isClockedIn ? `Clocked In — ${elapsed || '…'} so far`
-                  : isClockedOut ? `Day Complete — ${Number(todayRecord?.total_hours ?? 0).toFixed(1)} hrs worked`
+                {isClockedIn ? `Clocked In${multi ? ` · session ${openRec!.session_no ?? 1}` : ''} — ${elapsed || '…'} so far`
+                  : isClockedOut ? `Day Complete — ${todayHours.toFixed(1)} hrs worked`
+                  : multi && todayRecs.length ? `Not clocked in · ${todayHours.toFixed(1)} hrs today in ${todayRecs.length} session${todayRecs.length > 1 ? 's' : ''}`
                   : 'Not Clocked In Today'}
               </p>
               <p className="text-white/70 text-xs">
-                {isClockedIn ? `Since ${format(new Date(todayRecord!.clock_in_time), 'hh:mm a')} · ${placeOf(todayRecord!)}`
-                  : isClockedOut ? `${format(new Date(todayRecord!.clock_in_time), 'hh:mm a')} → ${format(new Date(todayRecord!.clock_out_time!), 'hh:mm a')}`
+                {isClockedIn ? `Since ${fmtT(openRec!.clock_in_time)} · ${placeOf(openRec!)}`
+                  : isClockedOut ? `${fmtT(lastRec!.clock_in_time)} → ${fmtT(lastRec!.clock_out_time!)}`
+                  : multi && todayRecs.length ? 'Clock in again when you reach the next site'
                   : format(new Date(), 'EEEE, dd MMMM yyyy')}
               </p>
             </div>
@@ -456,7 +488,7 @@ export default function AttendancePage() {
                 {!isClockedIn && (
                   <>
                     <div>
-                      <p className="block text-sm font-medium text-slate-700 mb-1.5">Where are you working today?</p>
+                      <p className="block text-sm font-medium text-slate-700 mb-1.5">{multi && todayRecs.length ? 'Where are you now?' : 'Where are you working today?'}</p>
                       <div className="grid grid-cols-2 gap-2">
                         {([['office', 'At the office', Building2], ['site', 'Project site', HardHat]] as const).map(([v, label, Icon]) => (
                           <button key={v} type="button" onClick={() => { setWorkType(v); setStatus('') }}
@@ -497,12 +529,27 @@ export default function AttendancePage() {
                   </>
                 )}
 
-                {isClockedIn && todayRecord?.clock_in_address && (
+                {isClockedIn && openRec?.clock_in_address && (
                   <div className="bg-green-50 border border-green-100 rounded-xl p-4">
-                    <p className="text-sm text-green-800 font-medium">{placeOf(todayRecord)}</p>
+                    <p className="text-sm text-green-800 font-medium">{placeOf(openRec)}</p>
                     <p className="text-xs text-green-600 mt-1 flex items-start gap-1">
-                      <MapPin size={10} className="mt-0.5 shrink-0" /> {todayRecord.clock_in_address}
+                      <MapPin size={10} className="mt-0.5 shrink-0" /> {openRec.clock_in_address}
                     </p>
+                  </div>
+                )}
+
+                {multi && todayRecs.length > 0 && (
+                  <div className="border border-slate-100 rounded-xl divide-y divide-slate-50">
+                    <p className="px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wide">Today’s sessions</p>
+                    {todayRecs.map(r => (
+                      <div key={r.id} className="px-4 py-2 flex items-center justify-between gap-3 text-sm">
+                        <div className="min-w-0">
+                          <p className="text-slate-800 truncate">{r.session_no ?? 1}. {placeOf(r)}</p>
+                          <p className="text-xs text-slate-500">{fmtT(r.clock_in_time)} → {r.clock_out_time ? fmtT(r.clock_out_time) : <span className="text-amber-600">now</span>}</p>
+                        </div>
+                        <span className="font-semibold text-slate-700 shrink-0">{r.total_hours != null ? `${Number(r.total_hours).toFixed(1)}h` : '…'}</span>
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -536,7 +583,7 @@ export default function AttendancePage() {
                 <CheckCircle size={40} className="text-green-500 mx-auto mb-3" />
                 <p className="text-slate-800 font-semibold">Great work today!</p>
                 <p className="text-slate-500 text-sm mt-1">
-                  You worked <strong>{Number(todayRecord?.total_hours ?? 0).toFixed(1)} hours</strong> · {placeOf(todayRecord!)}
+                  You worked <strong>{todayHours.toFixed(1)} hours</strong> · {placeOf(lastRec!)}
                 </p>
                 {status && <p className="text-green-600 text-sm mt-2">{status}</p>}
               </div>
@@ -551,7 +598,7 @@ export default function AttendancePage() {
           <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
             <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
               <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
-                <Users size={16} className="text-green-600" /> Team attendance · {teamRows.length} of {staff.length} clocked in
+                <Users size={16} className="text-green-600" /> Team attendance · {byEmp.size} of {staff.length} clocked in
               </h3>
               <input type="date" value={teamDate} max={today} onChange={e => e.target.value && setTeamDate(e.target.value)}
                 aria-label="Day to show" className="text-sm border border-slate-200 rounded-lg px-2 py-1" />
@@ -564,21 +611,40 @@ export default function AttendancePage() {
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {staff.map(p => {
-                    const r = byEmp.get(p.id)
-                    return (
+                    const rs = byEmp.get(p.id) ?? []
+                    const dayTotal = rs.reduce((t, r) => t + Number(r.total_hours ?? 0), 0)
+                    const pMode: Mode = p.attendance_mode === 'field' ? 'field' : 'office'
+                    const nameCell = (
+                      <td className="px-4 py-3 align-top" rowSpan={Math.max(rs.length, 1) + (rs.length > 1 ? 1 : 0)}>
+                        <p className="font-medium text-slate-800">{p.full_name}</p>
+                        {p.designation && <p className="text-xs text-slate-400">{p.designation}</p>}
+                        {isCeo ? (
+                          <select value={pMode} onChange={e => changeMode(p, e.target.value as Mode)} aria-label={`Attendance type of ${p.full_name}`}
+                            className="mt-1 text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white text-slate-600">
+                            <option value="office">Office · once a day</option>
+                            <option value="field">Site / O&amp;M · several a day</option>
+                          </select>
+                        ) : pMode === 'field' && <p className="text-[11px] text-slate-400">Site / O&amp;M · several a day</p>}
+                      </td>
+                    )
+                    if (rs.length === 0) return (
                       <tr key={p.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-slate-800">{p.full_name}</p>
-                          {p.designation && <p className="text-xs text-slate-400">{p.designation}</p>}
-                        </td>
-                        {r ? (<>
+                        {nameCell}
+                        <td colSpan={5} className="px-4 py-3 text-xs text-slate-400 align-top">Not clocked in</td>
+                      </tr>
+                    )
+                    return [
+                      ...rs.map((r, i) => (
+                        <tr key={r.id} className="hover:bg-slate-50">
+                          {i === 0 && nameCell}
                           <td className="px-4 py-3 text-slate-600">
+                            {rs.length > 1 && <span className="text-xs text-slate-400 mr-1">{r.session_no ?? i + 1}.</span>}
                             {placeOf(r)}
                             {r.work_type === 'office' && r.clock_in_distance_m != null && <span className="block text-xs text-slate-400">{r.clock_in_distance_m} m from office</span>}
                           </td>
-                          <td className="px-4 py-3 text-slate-600">{format(new Date(r.clock_in_time), 'hh:mm a')}</td>
+                          <td className="px-4 py-3 text-slate-600">{fmtT(r.clock_in_time)}</td>
                           <td className="px-4 py-3 text-slate-600">
-                            {r.clock_out_time ? format(new Date(r.clock_out_time), 'hh:mm a') : <span className="text-amber-500 text-xs">Working…</span>}
+                            {r.clock_out_time ? fmtT(r.clock_out_time) : <span className="text-amber-500 text-xs">Working…</span>}
                             {r.is_location_mismatch && <span className="block text-xs text-red-500">⚠ clocked out {r.clock_out_distance_m != null ? `${r.clock_out_distance_m} m away` : 'away from the office'}</span>}
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-800">{r.total_hours != null ? `${Number(r.total_hours).toFixed(1)}h` : '—'}</td>
@@ -586,15 +652,26 @@ export default function AttendancePage() {
                             {r.clock_in_lat != null && r.clock_in_lng != null && (
                               <a href={mapLink(r.clock_in_lat, r.clock_in_lng)} target="_blank" rel="noreferrer" className="text-xs text-green-700 hover:underline">Map</a>)}
                           </td>
-                        </>) : (
-                          <td colSpan={5} className="px-4 py-3 text-xs text-slate-400">Not clocked in</td>
-                        )}
-                      </tr>
-                    )
+                        </tr>
+                      )),
+                      ...(rs.length > 1 ? [(
+                        <tr key={`${p.id}-total`} className="bg-slate-50/60">
+                          <td colSpan={3} className="px-4 py-2 text-xs text-slate-500">Day total · {rs.length} sessions</td>
+                          <td className="px-4 py-2 font-bold text-slate-900">{dayTotal.toFixed(1)}h</td>
+                          <td />
+                        </tr>
+                      )] : []),
+                    ]
                   })}
                 </tbody>
               </table>
             </div>
+            {isCeo && (
+              <p className="px-5 py-3 border-t border-slate-100 text-xs text-slate-500">
+                <b>Attendance type:</b> “Office” staff clock in once a day. “Site / O&amp;M” staff (installation, operation &amp; maintenance) clock in and out at every site they visit; their day total is the sum of the sessions.
+                {modeMsg && <span className="block mt-1 text-slate-700">{modeMsg}</span>}
+              </p>
+            )}
           </div>
         )}
 
@@ -696,7 +773,8 @@ export default function AttendancePage() {
                   <tr><td colSpan={5} className="text-center py-8 text-slate-400 text-sm">No attendance records yet</td></tr>
                 ) : history.map(rec => (
                   <tr key={rec.id} className="hover:bg-slate-50 transition">
-                    <td className="px-4 py-3 font-medium text-slate-800">{format(new Date(rec.date), 'dd MMM yyyy')}</td>
+                    <td className="px-4 py-3 font-medium text-slate-800">{format(new Date(rec.date), 'dd MMM yyyy')}
+                      {(rec.session_no ?? 1) > 1 && <span className="block text-xs font-normal text-slate-400">session {rec.session_no}</span>}</td>
                     <td className="px-4 py-3 text-slate-600 truncate max-w-[160px]">{placeOf(rec)}</td>
                     <td className="px-4 py-3 text-slate-600">{rec.clock_in_time ? format(new Date(rec.clock_in_time), 'hh:mm a') : '—'}</td>
                     <td className="px-4 py-3 text-slate-600">{rec.clock_out_time ? format(new Date(rec.clock_out_time), 'hh:mm a') : <span className="text-amber-500 text-xs">In progress…</span>}</td>

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient, createAdminClient } from '@/lib/supabase/server'
+import { mailConfigured } from '@/lib/mailer'
+import { inviteLink, emailLink } from '@/lib/auth-links'
 
 export async function POST(req: NextRequest) {
   try {
@@ -53,26 +55,41 @@ export async function POST(req: NextRequest) {
     // APPROVE — invite user via Supabase Auth
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
 
-    const { data: inviteData, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
-      reg.email,
-      {
-        data: {
-          full_name:       reg.full_name,
-          phone:           reg.phone,
-          designation:     reg.designation,
-          department:      reg.department,
-          date_of_joining: reg.date_of_joining,
-          role:            'employee',
-        },
-        redirectTo: `${siteUrl}/auth/callback?next=/staff/dashboard`,
-      }
-    )
+    const meta = {
+      full_name:       reg.full_name,
+      phone:           reg.phone,
+      designation:     reg.designation,
+      department:      reg.department,
+      date_of_joining: reg.date_of_joining,
+      role:            'employee',
+    }
+    let invitedUserId: string | null = null
+    let link: string | null = null
+    let emailed = false
 
-    if (inviteErr) {
-      // If user already exists in auth (edge case), still mark registration approved
-      if (!inviteErr.message.includes('already been registered')) {
-        console.error('[Approve API] Invite error:', inviteErr)
-        return NextResponse.json({ error: `Invite failed: ${inviteErr.message}` }, { status: 500 })
+    if (mailConfigured()) {
+      // The CRM makes the link and emails it through the company Gmail (Supabase's own mailer
+      // does not deliver to staff on the free plan); the link is also shown to the admin to share
+      try {
+        const inv = await inviteLink(reg.email, meta)
+        invitedUserId = inv.userId
+        link = inv.link
+        emailed = await emailLink(reg.email, reg.full_name ?? '', 'invite', inv.link)
+      } catch (err) {
+        console.error('[Approve API] Invite error:', err)
+        return NextResponse.json({ error: `Invite failed: ${err instanceof Error ? err.message : err}` }, { status: 500 })
+      }
+    } else {
+      const { data: inviteData, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(reg.email, {
+        data: meta, redirectTo: `${siteUrl}/auth/callback?next=/staff/reset-password`,
+      })
+      invitedUserId = inviteData?.user?.id ?? null
+      if (inviteErr) {
+        // If user already exists in auth (edge case), still mark registration approved
+        if (!inviteErr.message.includes('already been registered')) {
+          console.error('[Approve API] Invite error:', inviteErr)
+          return NextResponse.json({ error: `Invite failed: ${inviteErr.message}` }, { status: 500 })
+        }
       }
     }
 
@@ -90,10 +107,10 @@ export async function POST(req: NextRequest) {
       target_entity:'employee_registrations',
       target_id:    registration_id,
       description:  `Registration approved for ${reg.email}. Invite email sent.`,
-      metadata:     { invited_user_id: inviteData?.user?.id ?? null },
+      metadata:     { invited_user_id: invitedUserId, emailed },
     })
 
-    return NextResponse.json({ message: `Invite sent to ${reg.email}. They will receive an email to set their password.` })
+    return NextResponse.json({ message: `Invite sent to ${reg.email}. They will receive an email to set their password.`, email: reg.email, link, emailed })
   } catch (err: unknown) {
     console.error('[Approve API]', err)
     return NextResponse.json(

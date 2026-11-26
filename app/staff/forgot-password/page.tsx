@@ -17,14 +17,22 @@ export default function ForgotPasswordPage() {
     setLoading(true)
     setError('')
 
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/staff/reset-password`,
-    })
+    // The CRM emails the link through the company Gmail; Supabase's own mailer only if that is not set up
+    const res = await fetch('/api/auth/forgot-password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }),
+    }).catch(() => null)
+    const data = res ? await res.json().catch(() => ({})) : {}
+    if (res && !res.ok) { setError(data.error ?? 'Could not send the link.'); setLoading(false); return }
 
-    if (resetError) {
-      setError(resetError.message)
-      setLoading(false)
-      return
+    if (!data.viaCrm) {
+      const { error: resetError } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${process.env.NEXT_PUBLIC_SITE_URL}/staff/reset-password`,
+      })
+      if (resetError) {
+        setError(resetError.message)
+        setLoading(false)
+        return
+      }
     }
 
     setSent(true)
@@ -44,7 +52,8 @@ export default function ForgotPasswordPage() {
 
         {sent ? (
           <div className="p-4 bg-green-50 border border-green-200 rounded-xl text-green-700 text-sm text-center">
-            ✅ Reset link sent! Check your email inbox and click the link.
+            ✅ If <b>{email}</b> is a staff login, a reset link is on its way. Check the inbox (and Spam) and open the link within 1 hour.
+            <br /><span className="text-xs text-green-800/80">Nothing arrived? Check the spelling of the email, or ask the admin to send you a login link.</span>
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">

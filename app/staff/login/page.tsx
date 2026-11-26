@@ -131,7 +131,7 @@ function LoginContent() {
           {/* Error banners */}
           {inviteError && (
             <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-sm">
-              ⚠️ Your invite link has expired or is invalid. Please ask admin to resend.
+              ⚠️ This link has expired or was already used. Press <b>Forgot password</b> below for a new one, or ask the admin to send a login link.
             </div>
           )}
 

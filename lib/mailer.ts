@@ -13,6 +13,34 @@ export function mailConfigured(): boolean {
   return Boolean(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)
 }
 
+function transport() {
+  return nodemailer.createTransport({
+    host: 'smtp.gmail.com', port: 465, secure: true,
+    auth: { user: process.env.GMAIL_USER!, pass: process.env.GMAIL_APP_PASSWORD!.replace(/\s/g, '') },
+    connectionTimeout: 8000, greetingTimeout: 8000, socketTimeout: 10000,
+  })
+}
+
+export interface AuthLinkEmail { to: string; name: string; kind: 'invite' | 'recovery'; link: string }
+
+/** Staff invite / password-reset email (the link itself comes from lib/auth-links). */
+export async function sendAuthLinkEmail(m: AuthLinkEmail): Promise<boolean> {
+  if (!mailConfigured()) return false
+  const invite = m.kind === 'invite'
+  const subject = invite ? 'Your Greenergy staff login: set your password' : 'Reset your Greenergy staff password'
+  const intro = invite
+    ? 'Your Greenergy staff account has been approved. Press the button to set your password, then sign in with this email address.'
+    : 'We received a request to reset the password of your Greenergy staff account. Press the button to choose a new password.'
+  const html = `<div style="font-family:Arial,sans-serif;font-size:15px;color:#1f2937;max-width:520px">
+<h2 style="color:#166534;margin:0 0 12px">${invite ? 'Welcome to Greenergy' : 'Password reset'}</h2>
+<p>Hello ${esc(m.name || 'there')},</p><p>${intro}</p>
+<p style="margin:22px 0"><a href="${esc(m.link)}" style="background:#166534;color:#fff;padding:11px 20px;border-radius:6px;text-decoration:none;font-weight:bold">Set my password</a></p>
+<p style="color:#6b7280;font-size:13px">The link works once and expires in 1 hour. If it has expired, use <b>Forgot password</b> on the staff login page.<br>If you did not expect this email, you can ignore it.</p></div>`
+  const text = `Hello ${m.name || 'there'},\n\n${intro}\n\n${m.link}\n\nThe link works once and expires in 1 hour.`
+  await transport().sendMail({ from: `"Greenergy CRM" <${process.env.GMAIL_USER}>`, to: m.to, subject, text, html })
+  return true
+}
+
 export interface LeadEmail {
   quotationId: string
   quotationNumber?: string | null
@@ -31,12 +59,6 @@ export async function sendLeadEmail(lead: LeadEmail): Promise<boolean> {
   const tel = lead.mobile.replace(/[^0-9+]/g, '')
   const wa = tel.replace(/^\+/, '')
 
-  const transport = nodemailer.createTransport({
-    host: 'smtp.gmail.com', port: 465, secure: true,
-    auth: { user, pass: process.env.GMAIL_APP_PASSWORD!.replace(/\s/g, '') },
-    connectionTimeout: 8000, greetingTimeout: 8000, socketTimeout: 10000,
-  })
-
   const rows: [string, string][] = [
     ['Name', esc(lead.name)],
     ['Mobile', `<a href="tel:${esc(tel)}">${esc(lead.mobile)}</a> · <a href="https://wa.me/${esc(wa)}">WhatsApp</a>`],
@@ -52,7 +74,7 @@ export async function sendLeadEmail(lead: LeadEmail): Promise<boolean> {
 <p style="color:#6b7280;font-size:13px">Sent automatically by the Greenergy CRM when the website form is submitted.</p></div>`
   const text = `New website enquiry\n\nName: ${lead.name}\nMobile: ${lead.mobile}\nLocation: ${lead.city || '-'}\nQuotation: ${lead.quotationNumber || '-'}\n\n${lead.notes || ''}\n\nOpen in the CRM: ${link}`
 
-  await transport.sendMail({
+  await transport().sendMail({
     from: `"Greenergy Website" <${user}>`,
     to,
     subject: `New enquiry: ${lead.name}${lead.city ? ' · ' + lead.city : ''} (${lead.mobile})`,

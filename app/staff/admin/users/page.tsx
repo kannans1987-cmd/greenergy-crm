@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
-import { UserCheck, UserX, Shield, Users, Clock } from 'lucide-react'
+import { UserCheck, UserX, Shield, Users, Clock, KeyRound } from 'lucide-react'
 
 interface Registration {
   id: string; full_name: string; email: string; phone: string | null
@@ -27,6 +27,8 @@ export default function UserManagementPage() {
   const [rejectId,  setRejectId] = useState<string | null>(null)
   const [rejectNote,setRejectNote]=useState('')
   const [toast,     setToast]    = useState('')
+  // "Login link" dialog: correct the email if needed, then email / copy / WhatsApp a set-password link
+  const [access,    setAccess]   = useState<{ emp: Employee; email: string; busy: boolean; link?: string; emailed?: boolean; sentTo?: string; error?: string } | null>(null)
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3500) }
 
@@ -51,7 +53,9 @@ export default function UserManagementPage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error ?? 'Approval failed')
-      showToast(`✅ Invite sent to ${reg.email}`)
+      if (data.link) setAccess({ emp: { id: '', full_name: reg.full_name, email: reg.email, role: 'employee', designation: null, department: null, status: 'active', price_access: null },
+        email: reg.email, busy: false, link: data.link, emailed: data.emailed, sentTo: reg.email })
+      else showToast(`✅ Invite sent to ${reg.email}`)
       setPending(prev => prev.filter(r => r.id !== reg.id))
     } catch (err: unknown) {
       showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`)
@@ -97,6 +101,27 @@ export default function UserManagementPage() {
     }
   }
 
+  const handleLoginLink = async () => {
+    if (!access) return
+    setAccess({ ...access, busy: true, error: undefined })
+    try {
+      const res = await fetch('/api/auth/staff-access', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: access.emp.id, new_email: access.email }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error ?? 'Failed')
+      setAccess(a => a && { ...a, busy: false, link: data.link, emailed: data.emailed, sentTo: data.email })
+      if (data.email !== access.emp.email) setEmployees(prev => prev.map(e => e.id === access.emp.id ? { ...e, email: data.email } : e))
+    } catch (err: unknown) {
+      setAccess(a => a && { ...a, busy: false, error: err instanceof Error ? err.message : 'Failed' })
+    }
+  }
+
+  const waText = (a: NonNullable<typeof access>) =>
+    `Hello ${a.emp.full_name}, here is your Greenergy staff login link. Open it within 1 hour to set your password, then sign in with ${a.sentTo}:
+${a.link}`
+
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Header title="User Management" subtitle="Approve registrations and manage employee access" />
@@ -104,6 +129,44 @@ export default function UserManagementPage() {
       {toast && (
         <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-5 py-3 rounded-xl shadow-xl text-sm">
           {toast}
+        </div>
+      )}
+
+      {/* Login link modal */}
+      {access && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="font-bold text-slate-900 mb-1">Login link for {access.emp.full_name}</h3>
+            {!access.link ? (<>
+              <p className="text-sm text-slate-500 mb-4">Check the login email is spelt correctly (you can correct it here), then create a one-time link to set a password.</p>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Login email</label>
+              <input type="email" value={access.email} onChange={e => setAccess({ ...access, email: e.target.value })}
+                className="w-full border border-slate-200 rounded-lg p-2.5 text-sm mb-2 focus:outline-none focus:ring-2 focus:ring-green-500" />
+              {access.email.trim().toLowerCase() !== access.emp.email.toLowerCase() && (
+                <p className="text-xs text-amber-700 mb-2">The login email will change from {access.emp.email} to {access.email.trim().toLowerCase()}.</p>)}
+              {access.error && <p className="text-xs text-red-600 mb-2">⚠ {access.error}</p>}
+              <div className="flex gap-2 justify-end mt-3">
+                <button onClick={() => setAccess(null)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition">Cancel</button>
+                <button onClick={handleLoginLink} disabled={access.busy}
+                  className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 transition">
+                  {access.busy ? 'Creating…' : 'Create login link'}</button>
+              </div>
+            </>) : (<>
+              <p className={`text-sm mb-3 ${access.emailed ? 'text-green-700' : 'text-amber-700'}`}>
+                {access.emailed ? `✅ Emailed to ${access.sentTo}. You can also send it on WhatsApp.` : `Email is not set up, so send this link to ${access.sentTo} on WhatsApp.`}
+              </p>
+              <textarea readOnly rows={3} value={access.link} onFocus={e => e.target.select()}
+                className="w-full border border-slate-200 rounded-lg p-2.5 text-xs text-slate-600 mb-2 resize-none" />
+              <p className="text-xs text-slate-500 mb-4">Works once, for 1 hour. They choose a password, then sign in with {access.sentTo}.</p>
+              <div className="flex flex-wrap gap-2 justify-end">
+                <button onClick={() => { navigator.clipboard.writeText(access.link!); showToast('Link copied') }}
+                  className="px-4 py-2 text-sm border border-slate-200 text-slate-700 rounded-lg hover:bg-slate-50 transition">Copy link</button>
+                <a href={`https://wa.me/?text=${encodeURIComponent(waText(access))}`} target="_blank" rel="noreferrer"
+                  className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition">WhatsApp</a>
+                <button onClick={() => setAccess(null)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition">Close</button>
+              </div>
+            </>)}
+          </div>
         </div>
       )}
 
@@ -247,10 +310,16 @@ export default function UserManagementPage() {
                         </span>
                       </td>
                       <td className="px-4 py-4">
+                        <div className="flex items-center gap-2">
+                        <button onClick={() => setAccess({ emp, email: emp.email, busy: false })} title="Correct the login email or send a set-password link"
+                          className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 transition whitespace-nowrap">
+                          <KeyRound size={12} /> Login link
+                        </button>
                         <button onClick={() => handleStatusToggle(emp)}
                           className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${emp.status === 'active' ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100 border border-green-100'}`}>
                           {emp.status === 'active' ? 'Deactivate' : 'Activate'}
                         </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

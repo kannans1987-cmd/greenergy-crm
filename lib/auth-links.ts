@@ -38,6 +38,25 @@ export async function inviteLink(email: string, meta: Record<string, unknown>): 
 /** Emails the link when Gmail is set up; returns whether it was sent. */
 export async function emailLink(to: string, name: string, kind: LinkKind, link: string): Promise<boolean> {
   if (!mailConfigured()) return false
-  try { return await sendAuthLinkEmail({ to, name, kind, link }) }
-  catch (err) { console.error('[auth-links] email failed:', err); return false }
+  try {
+    const ok = await sendAuthLinkEmail({ to, name, kind, link })
+    await logMail('email_sent', `${kind === 'invite' ? 'Invite' : 'Password'} email sent to ${to}.`)
+    return ok
+  } catch (err) {
+    console.error('[auth-links] email failed:', err)
+    await logMail('email_failed', `${kind === 'invite' ? 'Invite' : 'Password'} email to ${to} failed: ${mailError(err)}`)
+    return false
+  }
+}
+
+/** Readable reason from a Gmail / SMTP error (never contains the password). */
+export function mailError(err: unknown): string {
+  const e = err as { code?: string; responseCode?: number; response?: string; message?: string }
+  return [e?.code, e?.responseCode, (e?.response || e?.message || String(err)).slice(0, 300)].filter(Boolean).join(' · ')
+}
+
+/** Email outcomes go to the audit log so delivery problems can be diagnosed. */
+export async function logMail(action_type: 'email_sent' | 'email_failed', description: string) {
+  try { await createAdminClient().from('audit_log').insert({ action_type, target_entity: 'email', description }) }
+  catch { /* logging must never break the request */ }
 }

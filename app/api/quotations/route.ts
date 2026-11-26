@@ -5,6 +5,7 @@ import { residentialSubsidy, subsidyEligible, buildPrice } from '@/lib/workflow'
 import { loadPricing, toOpts, quotationColumns, saveCosting } from '@/lib/pricing-server'
 import { workout, type Workout } from '@/lib/pricing-engine'
 import { sendLeadEmail } from '@/lib/mailer'
+import { logMail, mailError } from '@/lib/auth-links'
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient()
@@ -257,6 +258,7 @@ export async function POST(req: NextRequest) {
         name: customer_name, mobile, city: str('city'), notes: str('notes') })
     } catch (err) {
       console.error('[quotations] enquiry email failed:', err)
+      await logMail('email_failed', `Enquiry email for ${customer_name} failed: ${mailError(err)}`)
     }
   }
 

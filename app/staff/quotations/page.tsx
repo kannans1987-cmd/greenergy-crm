@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import Header from '@/components/staff/Header'
 import Link from 'next/link'
-import { Plus } from 'lucide-react'
+import { Plus, Phone } from 'lucide-react'
 import HotColdPicker from '@/components/staff/HotColdPicker'
 import { STATUS_LABELS, STATUS_COLORS, WITH_CUSTOMER, followUpState, inr, todayIso, EDITABLE, PRE_VISIT, isOpen } from '@/lib/workflow'
 
@@ -14,7 +14,10 @@ interface Row {
   assigned_sales_id: string | null; assigned_engineer_id: string | null; follow_up_manager_id: string | null
   site_visit_at: string | null; site_visit_done_at: string | null
   lead_temperature_at?: string | null; lead_temperature_note?: string | null
+  source: string | null
 }
+
+const SOURCE_TAG: Record<string, string> = { website: '🌐 Website', phone: '📞 Phone', walk_in: '🚶 Walk-in', referral: '🤝 Referral', social_media: '💬 WhatsApp', other: '' }
 
 // Hot first, then cold, then not set
 const HEAT: Record<string, number> = { hot: 0, cold: 2 }
@@ -49,7 +52,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
   const { data: me } = await supabase.from('profiles').select('*').eq('id', user?.id ?? '').single()
 
   // Row-level security limits staff to their own quotations; managers see all
-  const COLS = `id, quotation_number, customer_name, mobile, city, status, lead_temperature, next_follow_up_date, job_number,
+  const COLS = `id, quotation_number, customer_name, mobile, city, source, status, lead_temperature, next_follow_up_date, job_number,
              admin_capacity_kw, recommended_capacity_kw, admin_total_cost, total_cost_before_subsidy, created_at, updated_at,
              assigned_sales_id, assigned_engineer_id, follow_up_manager_id, site_visit_at, site_visit_done_at, lead_temperature_at, lead_temperature_note,
              assigned_sales:assigned_sales_id ( full_name ), follow_up_manager:follow_up_manager_id ( full_name ),
@@ -96,6 +99,11 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
             <input name="q" defaultValue={searchParams.q ?? ''} placeholder="Search name, mobile, number, town…" aria-label="Search quotations"
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
           </form>
+          {(isMgr || delegate) && (
+            <Link href="/staff/quotations/enquiry" className="flex items-center gap-1.5 px-4 py-2 bg-white border border-green-600 text-green-700 text-sm font-semibold rounded-lg hover:bg-green-50">
+              <Phone size={15} /> Log phone enquiry
+            </Link>
+          )}
           <Link href="/staff/quotations/new" className="flex items-center gap-1.5 px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700">
             <Plus size={15} /> New quotation
           </Link>
@@ -122,7 +130,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
                   return (
                     <tr key={r.id} className="hover:bg-slate-50">
                       <td className="px-4 py-3"><Link href={`/staff/quotations/${r.id}`} className="font-mono text-xs font-semibold text-green-700 hover:underline">{r.job_number ?? r.quotation_number}</Link></td>
-                      <td className="px-4 py-3"><p className="font-medium text-slate-800">{r.customer_name}</p><p className="text-xs text-slate-400">{r.mobile}{r.city ? ` · ${r.city}` : ''}</p></td>
+                      <td className="px-4 py-3"><p className="font-medium text-slate-800">{r.customer_name}</p><p className="text-xs text-slate-400">{r.mobile}{r.city ? ` · ${r.city}` : ''}{r.source && SOURCE_TAG[r.source] ? <span className="ml-1.5 text-slate-500">{SOURCE_TAG[r.source]}</span> : null}</p></td>
                       <td className="px-4 py-3">{r.admin_capacity_kw ?? r.recommended_capacity_kw ?? '—'}</td>
                       <td className="px-4 py-3 whitespace-nowrap">{inr(r.admin_total_cost ?? r.total_cost_before_subsidy)}</td>
                       <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${STATUS_COLORS[r.status] ?? 'bg-slate-100'}`}>{STATUS_LABELS[r.status] ?? r.status}</span></td>

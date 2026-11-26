@@ -12,7 +12,8 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(req.url)
   if (url.searchParams.get('me')) {
-    const { data: me } = await supabase.from('profiles').select('id, full_name, role, phone').eq('id', user.id).single()
+    const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+    const me = p ? { id: p.id, full_name: p.full_name, role: p.role, phone: p.phone, quotation_access: p.quotation_access === true } : null
     return NextResponse.json({ me })
   }
   const roleParam = url.searchParams.get('role')

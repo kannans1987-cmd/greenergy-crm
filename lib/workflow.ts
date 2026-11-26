@@ -81,9 +81,10 @@ export interface QuoteForRules {
 }
 
 // Which actions to offer this person at this stage
-export function availableActions(q: QuoteForRules, role: Role, uid: string) {
+// quotationAccess: "Quotations: edit & delete" given by the CEO in User Management
+export function availableActions(q: QuoteForRules, role: Role, uid: string, quotationAccess = false) {
   const own = q.assigned_sales_id === uid || q.follow_up_manager_id === uid
-  const staffOk = isManager(role) || own
+  const staffOk = isManager(role) || own || quotationAccess
   const s = q.status
   return {
     edit:            staffOk && isEditable(s),
@@ -100,6 +101,10 @@ export function availableActions(q: QuoteForRules, role: Role, uid: string) {
     reopen:          isManager(role) && ['cancelled', 'rejected'].includes(s),
     convert:         isManager(role) && ['customer_accepted', 'advance_pending'].includes(s) && !q.project_id,
     reassign:        isManager(role) && s !== 'project_created',
+    // Wrong or duplicate quotations; never once a job card exists (the database refuses too)
+    remove:          (role === 'admin' || quotationAccess) && s !== 'project_created' && !q.project_id,
+    // The CEO can save a draft and approve it in one step
+    saveApprove:     role === 'admin' && isEditable(s),
   }
 }
 

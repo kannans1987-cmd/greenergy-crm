@@ -11,3 +11,5 @@ To run it on a throwaway local PostgreSQL 15+:
 The last line printed is `ALL WORKFLOW CHECKS PASSED`. Any broken rule stops the run with `FAILED: …` naming the check.
 
 After editing any part file, rebuild the combined script with `node supabase/build-setup.mjs`.
+
+`quotation_access_v1_test.sql` checks who may edit and delete quotations; it ends with `ALL QUOTATION ACCESS CHECKS PASSED`.

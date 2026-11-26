@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, CheckCircle, AlertTriangle, Loader2, Zap, Send, Flame, Snowflake, Phone, MessageSquare,
   History, User, FileText, Download, Copy, ExternalLink, RotateCcw, XCircle, ClipboardCheck,
+  Trash2,
 } from 'lucide-react'
 import {
   STATUS_LABELS, STATUS_COLORS, FLOW, flowStep, availableActions, convertBlocker, buildPrice, inr,
@@ -45,7 +46,7 @@ interface Q {
   panel_brand: string | null; panel_wp: number | null; panel_count: number | null; inverter_brand: string | null; inverter_label: string | null
   system_phase: number | null; battery_label: string | null; battery_qty: number | null; priced_from_list: boolean; price_list_month: string | null
   costing: { data: Costing; catalogue_version: number | null; updated_at: string } | null
-  me: { id: string; full_name: string; role: Role; phone: string | null }
+  me: { id: string; full_name: string; role: Role; phone: string | null; quotation_access?: boolean }
 }
 
 // ─── STYLE HELPERS ───────────────────────────────────────────────────────────
@@ -137,7 +138,7 @@ export default function QuotationDetailClient({ id }: { id: string }) {
     return act(action, { remarks: r.trim(), ...extra }, okMsg)
   }
 
-  async function saveEdits(thenSubmit = false, reprice = false) {
+  async function saveEdits(thenSubmit = false, reprice = false, thenApprove = false) {
     const body: Record<string, unknown> = {
       ...(reprice ? { reprice: true, capacity_kw: Number(form.admin_capacity_kw) || null, panel_brand: form.panel_brand || null,
                       inverter_brand: form.inverter_brand || null, battery_qty: Number(form.battery_qty) || null } : {}),
@@ -149,6 +150,28 @@ export default function QuotationDetailClient({ id }: { id: string }) {
     }
     const ok = await call(`/api/quotations/${id}`, 'PATCH', body, reprice ? 'reprice' : 'save', reprice ? 'Re-priced from the price list' : 'Quotation saved')
     if (ok && thenSubmit) await act('submit', {}, 'Submitted for CEO approval')
+    if (ok && thenApprove) {
+      const sub = await act('submit', {}, 'Submitted')
+      if (sub) await act('approve', { remarks: 'Edited and approved by the CEO' }, 'Saved and approved')
+    }
+  }
+
+  async function removeQuotation() {
+    if (!q) return
+    const reason = window.prompt(`Delete quotation ${q.quotation_number} for ${q.customer_name}?
+
+This cannot be undone. Its follow-ups, comments and uploaded files are deleted too.
+
+Reason (e.g. duplicate, test, wrong customer):`)
+    if (reason === null) return
+    if (!reason.trim()) { show('Please give a short reason for deleting.', false); return }
+    setBusy('remove')
+    try {
+      const r = await fetch(`/api/quotations/${id}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: reason.trim() }) })
+      const data = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(data.error ?? 'Could not delete.')
+      router.push('/staff/quotations'); router.refresh()
+    } catch (e) { show(e instanceof Error ? e.message : 'Could not delete.', false); setBusy(null) }
   }
 
   if (loading) return <div className="flex items-center justify-center h-screen"><Loader2 className="animate-spin text-green-600" /></div>
@@ -160,7 +183,7 @@ export default function QuotationDetailClient({ id }: { id: string }) {
   )
 
   const me = q.me
-  const can = availableActions(q, me.role, me.id)
+  const can = availableActions(q, me.role, me.id, !!me.quotation_access)
   const step = flowStep(q.status)
   const portalUrl = typeof window !== 'undefined' ? `${window.location.origin}/portal/${q.portal_token}` : ''
   const shared = ['sent_to_customer', 'customer_accepted', 'advance_pending', 'project_created'].includes(q.status)
@@ -263,6 +286,9 @@ export default function QuotationDetailClient({ id }: { id: string }) {
             {can.lose && <button className={`${BTN} bg-red-50 text-red-700 hover:bg-red-100`} disabled={!!busy}
               onClick={() => askAct('lose', 'Why was it lost / declined?', 'Marked lost')}>Mark lost</button>}
             {can.reopen && <button className={`${BTN} bg-slate-100 text-slate-700`} disabled={!!busy} onClick={() => act('reopen', {}, 'Reopened')}>Reopen</button>}
+            {can.remove && <button className={`${BTN} ml-auto bg-white text-red-600 border border-red-200 hover:bg-red-50`} disabled={!!busy} onClick={removeQuotation}
+              title="Delete a wrong, test or duplicate quotation">
+              {busy === 'remove' ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />} Delete quotation</button>}
           </div>
         </div>
 
@@ -332,6 +358,10 @@ export default function QuotationDetailClient({ id }: { id: string }) {
                   <div className="flex justify-end gap-2 mt-4">
                     <button className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg hover:bg-green-700 disabled:opacity-50" disabled={!dirty || !!busy} onClick={() => saveEdits(false)}>
                       {busy === 'save' && <Loader2 size={14} className="animate-spin inline mr-1" />}Save changes</button>
+                    {can.saveApprove && <button className="px-4 py-2 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800 disabled:opacity-50" disabled={!!busy}
+                      title="Save your changes and approve the quotation in one step"
+                      onClick={() => { if (window.confirm('Save the changes and approve this quotation now?')) saveEdits(false, false, true) }}>
+                      Save &amp; approve</button>}
                   </div>
                 )}
               </div>

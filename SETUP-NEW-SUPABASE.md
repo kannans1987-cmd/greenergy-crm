@@ -61,6 +61,7 @@ Only the CEO can give or remove this access, and every change on the Price List 
 | `employee` | **Sales / field staff** | Create quotations (assigned to themselves), submit for approval, share after approval, follow up, mark hot/cold |
 | `employee` appointed on a project | **Administrative officer** | Update the milestones of the projects the CEO appointed them to |
 
+- **Quotations: edit & delete** (User Management): the CEO can give this to anyone. They see and edit every quotation and can delete wrong, test or duplicate ones. Only the CEO and these people can delete; a quotation with a numbered job card can never be deleted, and every deletion is kept in the audit log with its reason. For the restored project, run `supabase/quotation_access_v1.sql` once in the SQL Editor (it is also part of `UPGRADE_EXISTING_PROJECT.sql`).
 - Prices come from the **Price List** page (supplier rates, all excluding GST; see step 1b). New quotations are priced from it automatically.
 
 ## 5. How the flow works

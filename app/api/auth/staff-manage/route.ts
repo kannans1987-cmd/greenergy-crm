@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).single()
   if (me?.role !== 'admin') return NextResponse.json({ error: 'Only the CEO can do this.' }, { status: 403 })
 
-  const { user_id, action, role, status } = await req.json().catch(() => ({}))
+  const { user_id, action, role, status, value } = await req.json().catch(() => ({}))
   if (typeof user_id !== 'string' || !user_id) return NextResponse.json({ error: 'user_id is required' }, { status: 400 })
   if (user_id === user.id) return NextResponse.json({ error: 'You cannot change or delete your own CEO account here.' }, { status: 400 })
 
@@ -40,6 +40,15 @@ export async function POST(req: NextRequest) {
       if (error) throw new Error(error.message)
       await audit('staff_role_changed', `Role of ${target.full_name} changed from ${target.role} to ${role}.`)
       return NextResponse.json({ ok: true, role })
+    }
+
+    if (action === 'quotation_access') {
+      const on = value === true
+      const { error } = await admin.from('profiles').update({ quotation_access: on }).eq('id', user_id)
+      if (error) throw new Error(/quotation_access/.test(error.message)
+        ? 'The database needs the quotation-access update first (supabase/quotation_access_v1.sql).' : error.message)
+      await audit('staff_quotation_access', `${target.full_name} ${on ? 'can now' : 'can no longer'} edit and delete all quotations.`)
+      return NextResponse.json({ ok: true, quotation_access: on })
     }
 
     if (action === 'status') {

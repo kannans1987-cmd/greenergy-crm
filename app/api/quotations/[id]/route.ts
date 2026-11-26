@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireStaff, dbError } from '@/lib/staff'
+import { requireStaff, dbError, canManageQuotations } from '@/lib/staff'
+import { createAdminClient } from '@/lib/supabase/server'
 import { buildPrice, isManager } from '@/lib/workflow'
 import { loadPricing, toOpts, quotationColumns, saveCosting } from '@/lib/pricing-server'
 import { workout, type Workout } from '@/lib/pricing-engine'
@@ -152,4 +153,46 @@ export async function PATCH(
 
   const { data } = await supabase.from('quotation_requests').select('*').eq('id', id).maybeSingle()
   return NextResponse.json(data)
+}
+
+// Delete a wrong or duplicate quotation: the CEO, or staff the CEO gave "Quotations: edit & delete".
+// Never once a job card exists (the database refuses as well). A snapshot is kept in the audit log.
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const auth = await requireStaff()
+  if ('error' in auth) return auth.error
+  const { supabase, me } = auth
+  const { id } = await params
+  if (!canManageQuotations(me)) {
+    return NextResponse.json({ error: 'Only the CEO, or staff the CEO allowed, can delete quotations.' }, { status: 403 })
+  }
+  const { reason } = await req.json().catch(() => ({ reason: '' }))
+  const why = typeof reason === 'string' ? reason.trim().slice(0, 500) : ''
+  if (!why) return NextResponse.json({ error: 'Please give a short reason for deleting.' }, { status: 400 })
+
+  const { data: q } = await supabase.from('quotation_requests')
+    .select('id, quotation_number, customer_name, mobile, city, status, source, admin_capacity_kw, recommended_capacity_kw, admin_total_cost, total_cost_before_subsidy, job_number, project_id, created_at')
+    .eq('id', id).maybeSingle()
+  if (!q) return NextResponse.json({ error: 'Quotation not found, or you do not have access to it.' }, { status: 404 })
+  if (q.project_id || q.job_number || q.status === 'project_created') {
+    return NextResponse.json({ error: `This quotation has a job card (${q.job_number ?? 'project'}) and cannot be deleted.` }, { status: 409 })
+  }
+
+  // Runs as the signed-in user, so the database's own delete rule applies
+  const { data: gone, error } = await supabase.from('quotation_requests').delete().eq('id', id).select('id')
+  if (error) return dbError(error)
+  if (!gone?.length) return NextResponse.json({ error: 'You do not have permission to delete this quotation.' }, { status: 403 })
+
+  const admin = createAdminClient()
+  // Uploaded bill / roof photos for this quotation
+  const { data: files } = await admin.storage.from('quotation-documents').list(id)
+  if (files?.length) await admin.storage.from('quotation-documents').remove(files.map((f: { name: string }) => `${id}/${f.name}`))
+  await admin.from('audit_log').insert({
+    action_by: me.id, action_type: 'quotation_deleted', target_entity: 'quotation_requests', target_id: id,
+    description: `Quotation ${q.quotation_number ?? ''} for ${q.customer_name} deleted by ${me.full_name}. Reason: ${why}`,
+    metadata: { ...q, reason: why },
+  })
+  return NextResponse.json({ ok: true, quotation_number: q.quotation_number })
 }

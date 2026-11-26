@@ -14,6 +14,7 @@ interface Employee {
   id: string; full_name: string; email: string; role: string
   designation: string | null; department: string | null; status: string
   price_access: string | null
+  quotation_access?: boolean
 }
 type Tab = 'pending' | 'employees'
 const ROLE_LABEL: Record<string, string> = { employee: 'Staff (sales / field)', task_manager: 'Admin manager', admin: 'CEO (admin)' }
@@ -49,7 +50,7 @@ export default function UserManagementPage() {
     supabase.auth.getUser().then(({ data }) => setMeId(data.user?.id ?? null))
     const [{ data: regs }, { data: emps }] = await Promise.all([
       supabase.from('employee_registrations').select('*').eq('status','pending').order('created_at'),
-      supabase.from('profiles').select('id,full_name,email,role,designation,department,status,price_access').order('full_name'),
+      supabase.from('profiles').select('*').order('full_name'),
     ])
     if (regs) setPending(regs as Registration[])
     if (emps) setEmployees(emps as Employee[])
@@ -99,6 +100,15 @@ export default function UserManagementPage() {
     if (error) { showToast(error.message); return }
     setEmployees(prev => prev.map(e => e.id === id ? { ...e, price_access } : e))
     showToast(price_access ? 'Price list access given' : 'Price list access removed')
+  }
+
+  // "Quotations: edit & delete" — see and edit every quotation, delete wrong ones
+  const handleQuotationAccess = async (emp: Employee, on: boolean) => {
+    try {
+      await manage({ user_id: emp.id, action: 'quotation_access', value: on })
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, quotation_access: on } : e))
+      showToast(on ? `✅ ${emp.full_name} can now edit and delete quotations` : `${emp.full_name} can no longer delete quotations`)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
   }
 
   const handleRoleChange = async (emp: Employee, role: string) => {
@@ -327,7 +337,7 @@ ${a.link}`
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-100">
                   <tr>
-                    {['Name','Email','Designation','Role','Price list access','Status','Actions'].map(h => (
+                    {['Name','Email','Designation','Role','Price list access','Quotations','Status','Actions'].map(h => (
                       <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -365,6 +375,15 @@ ${a.link}`
                             <option value="prices">Supplier prices</option>
                             <option value="prices_and_margin">Prices &amp; margin</option>
                           </select>
+                        )}
+                      </td>
+                      <td className="px-4 py-4">
+                        {emp.role === 'admin' ? <span className="text-xs text-slate-500">Full (CEO)</span> : (
+                          <label className="flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer whitespace-nowrap" title="See and edit every quotation, and delete wrong ones">
+                            <input type="checkbox" checked={!!emp.quotation_access} onChange={e => handleQuotationAccess(emp, e.target.checked)}
+                              className="accent-green-600" aria-label={`Quotations edit and delete for ${emp.full_name}`} />
+                            Edit &amp; delete
+                          </label>
                         )}
                       </td>
                       <td className="px-4 py-4">

@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+  const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
 
   const url = new URL(req.url)
   const status = url.searchParams.get('status')
@@ -25,8 +25,8 @@ export async function GET(req: NextRequest) {
     `)
     .order('created_at', { ascending: false })
 
-  // Employees only see quotations assigned to them
-  if (profile?.role === 'employee') {
+  // Employees only see quotations assigned to them (unless the CEO gave them quotation access)
+  if (profile?.role === 'employee' && !profile?.quotation_access) {
     q = q.or(`assigned_sales_id.eq.${user.id},assigned_engineer_id.eq.${user.id},follow_up_manager_id.eq.${user.id}`)
   }
 

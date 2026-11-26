@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
-import { UserCheck, UserX, Shield, Users, Clock, KeyRound } from 'lucide-react'
+import { UserCheck, UserX, Shield, Users, Clock, KeyRound, Trash2 } from 'lucide-react'
 
 interface Registration {
   id: string; full_name: string; email: string; phone: string | null
@@ -16,6 +16,7 @@ interface Employee {
   price_access: string | null
 }
 type Tab = 'pending' | 'employees'
+const ROLE_LABEL: Record<string, string> = { employee: 'Staff (sales / field)', task_manager: 'Admin manager', admin: 'CEO (admin)' }
 
 export default function UserManagementPage() {
   const supabase = createClient()
@@ -30,9 +31,22 @@ export default function UserManagementPage() {
   // "Login link" dialog: correct the email if needed, then email / copy / WhatsApp a set-password link
   const [access,    setAccess]   = useState<{ emp: Employee; email: string; busy: boolean; link?: string; emailed?: boolean; sentTo?: string; error?: string } | null>(null)
 
-  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 3500) }
+  const [meId,      setMeId]     = useState<string | null>(null)
+  const [toDelete,  setToDelete] = useState<Employee | null>(null)
+  const [deleting,  setDeleting] = useState(false)
+
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 4000) }
+
+  // Role, status and delete go through the server (CEO only), which also blocks or unblocks the login
+  const manage = async (body: Record<string, unknown>) => {
+    const res = await fetch('/api/auth/staff-manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error ?? 'Failed')
+    return data
+  }
 
   const loadData = useCallback(async () => {
+    supabase.auth.getUser().then(({ data }) => setMeId(data.user?.id ?? null))
     const [{ data: regs }, { data: emps }] = await Promise.all([
       supabase.from('employee_registrations').select('*').eq('status','pending').order('created_at'),
       supabase.from('profiles').select('id,full_name,email,role,designation,department,status,price_access').order('full_name'),
@@ -87,18 +101,45 @@ export default function UserManagementPage() {
     showToast(price_access ? 'Price list access given' : 'Price list access removed')
   }
 
-  const handleRoleChange = async (id: string, role: string) => {
-    const { error } = await supabase.from('profiles').update({ role }).eq('id', id)
-    if (!error) { setEmployees(prev => prev.map(e => e.id === id ? { ...e, role } : e)); showToast('Role updated') }
+  const handleRoleChange = async (emp: Employee, role: string) => {
+    if (role === emp.role) return
+    const extra = role === 'admin' ? '\n\nA CEO (admin) can see everything, approve quotations, change prices and manage all users.' : ''
+    if (!window.confirm(`Change the role of ${emp.full_name} from "${ROLE_LABEL[emp.role] ?? emp.role}" to "${ROLE_LABEL[role]}"?${extra}`)) {
+      setEmployees(prev => [...prev]) // put the dropdown back
+      return
+    }
+    try {
+      await manage({ user_id: emp.id, action: 'role', role })
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, role } : e))
+      showToast(`✅ ${emp.full_name} is now ${ROLE_LABEL[role]}`)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
   }
 
   const handleStatusToggle = async (emp: Employee) => {
     const newStatus = emp.status === 'active' ? 'inactive' : 'active'
-    const { error } = await supabase.from('profiles').update({ status: newStatus }).eq('id', emp.id)
-    if (!error) {
+    if (newStatus === 'inactive' && !window.confirm(`Deactivate ${emp.full_name}? They will not be able to sign in until you activate them again.`)) return
+    try {
+      await manage({ user_id: emp.id, action: 'status', status: newStatus })
       setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, status: newStatus } : e))
       showToast(`${emp.full_name} is now ${newStatus}`)
-    }
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
+  }
+
+  const handleDelete = async () => {
+    if (!toDelete) return
+    setDeleting(true)
+    try {
+      const data = await manage({ user_id: toDelete.id, action: 'delete' })
+      if (data.deleted) {
+        setEmployees(prev => prev.filter(e => e.id !== toDelete.id))
+        showToast(`🗑 ${toDelete.full_name} has been deleted`)
+      } else {
+        setEmployees(prev => prev.map(e => e.id === toDelete.id ? { ...e, status: 'inactive', price_access: null } : e))
+        showToast(`${toDelete.full_name} has been removed: login blocked, their records kept`)
+      }
+      setToDelete(null)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
+    finally { setDeleting(false) }
   }
 
   const handleLoginLink = async () => {
@@ -166,6 +207,27 @@ ${a.link}`
                 <button onClick={() => setAccess(null)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition">Close</button>
               </div>
             </>)}
+          </div>
+        </div>
+      )}
+
+      {/* Delete modal */}
+      {toDelete && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+            <h3 className="font-bold text-slate-900 mb-2">Delete {toDelete.full_name}?</h3>
+            <p className="text-sm text-slate-600 mb-2">{toDelete.email} · {ROLE_LABEL[toDelete.role] ?? toDelete.role}</p>
+            <ul className="text-sm text-slate-500 list-disc pl-5 space-y-1 mb-5">
+              <li>They can no longer sign in, straight away.</li>
+              <li>If they have no work in the CRM yet, the account is deleted completely.</li>
+              <li>If quotations, tasks, attendance or projects carry their name, those records are <b>kept</b> and the login is blocked for good (shown as inactive).</li>
+            </ul>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setToDelete(null)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg transition">Cancel</button>
+              <button onClick={handleDelete} disabled={deleting}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 transition">
+                {deleting ? 'Deleting…' : 'Delete user'}</button>
+            </div>
           </div>
         </div>
       )}
@@ -286,8 +348,9 @@ ${a.link}`
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1">
                           <Shield size={12} className={emp.role === 'admin' ? 'text-purple-500' : emp.role === 'task_manager' ? 'text-blue-500' : 'text-slate-400'} />
-                          <select value={emp.role} onChange={e => handleRoleChange(emp.id, e.target.value)}
-                            className="text-xs bg-transparent text-slate-700 border-none focus:outline-none cursor-pointer">
+                          <select value={emp.role} onChange={e => handleRoleChange(emp, e.target.value)} disabled={emp.id === meId}
+                            aria-label={`Role of ${emp.full_name}`}
+                            className="text-xs bg-transparent text-slate-700 border border-slate-200 rounded px-1 py-0.5 focus:outline-none cursor-pointer disabled:cursor-default disabled:border-transparent">
                             <option value="employee">Staff (sales / field)</option>
                             <option value="task_manager">Admin manager</option>
                             <option value="admin">CEO (admin)</option>
@@ -310,6 +373,7 @@ ${a.link}`
                         </span>
                       </td>
                       <td className="px-4 py-4">
+                        {emp.id === meId ? <span className="text-xs text-slate-400">You</span> : (
                         <div className="flex items-center gap-2">
                         <button onClick={() => setAccess({ emp, email: emp.email, busy: false })} title="Correct the login email or send a set-password link"
                           className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 transition whitespace-nowrap">
@@ -319,7 +383,11 @@ ${a.link}`
                           className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${emp.status === 'active' ? 'bg-red-50 text-red-600 hover:bg-red-100 border border-red-100' : 'bg-green-50 text-green-600 hover:bg-green-100 border border-green-100'}`}>
                           {emp.status === 'active' ? 'Deactivate' : 'Activate'}
                         </button>
-                        </div>
+                        <button onClick={() => setToDelete(emp)} title={`Delete ${emp.full_name}`} aria-label={`Delete ${emp.full_name}`}
+                          className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 border border-transparent hover:border-red-100 transition">
+                          <Trash2 size={14} />
+                        </button>
+                        </div>)}
                       </td>
                     </tr>
                   ))}

@@ -156,7 +156,7 @@ export default function AttendancePage() {
   const approvedElse = myDevices.find(d => d.status === 'approved' && d.id !== deviceKey?.id)
   const phoneState: 'ceo' | 'computer' | 'approved' | 'pending' | 'none' =
     isCeo ? 'ceo' : !onPhone ? 'computer' : thisDevice?.status === 'approved' ? 'approved' : thisDevice?.status === 'pending' ? 'pending' : 'none'
-  const canClock = phoneState === 'ceo' || phoneState === 'approved'
+  const canClock = phoneState === 'approved'
 
   const loadDevices = useCallback(async (uid: string, ceo: boolean) => {
     const { data } = await supabase.from('trusted_devices').select('id,employee_id,label,status,created_at,last_used_at')
@@ -232,7 +232,7 @@ export default function AttendancePage() {
 
   const loadTeam = useCallback(async (date: string) => {
     const [{ data: people }, { data: rows }] = await Promise.all([
-      supabase.from('profiles').select('id,full_name,designation,role').eq('status', 'active').order('full_name'),
+      supabase.from('profiles').select('id,full_name,designation,role').eq('status', 'active').neq('role', 'admin').order('full_name'),
       supabase.from('attendance').select(SELECT).eq('date', date),
     ])
     setStaff((people as Staff[]) ?? [])
@@ -394,7 +394,7 @@ export default function AttendancePage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
-      <Header title="Attendance" subtitle="GPS Clock-In / Clock-Out" />
+      <Header title="Attendance" subtitle={isCeo ? "Team attendance, phones and office location" : "GPS Clock-In / Clock-Out"} />
 
       <div className="flex-1 p-4 sm:p-6 max-w-4xl mx-auto w-full space-y-6">
 
@@ -431,7 +431,8 @@ export default function AttendancePage() {
           </div>
         )}
 
-        {/* Clock-in card */}
+        {/* Clock-in card (staff only: the CEO does not clock in) */}
+        {!isCeo && (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className={`p-4 flex items-center gap-3 ${isClockedIn ? 'bg-green-600' : isClockedOut ? 'bg-slate-700' : 'bg-amber-500'}`}>
             <MapPin size={20} className="text-white shrink-0" />
@@ -542,6 +543,8 @@ export default function AttendancePage() {
             )}
           </div>
         </div>
+
+        )}
 
         {/* Managers: everyone's attendance for a day */}
         {isManager && (
@@ -674,7 +677,8 @@ export default function AttendancePage() {
           </div>
         )}
 
-        {/* My history */}
+        {/* My history (staff only) */}
+        {!isCeo && (
         <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
           <div className="px-5 py-4 border-b border-slate-100">
             <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
@@ -704,6 +708,7 @@ export default function AttendancePage() {
           </div>
         </div>
 
+        )}
       </div>
     </div>
   )

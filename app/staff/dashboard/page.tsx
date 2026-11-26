@@ -85,6 +85,7 @@ export default function EmployeeDashboard() {
   const [profile,     setProfile]     = useState<{ full_name: string } | null>(null)
   const [tasks,       setTasks]       = useState<Task[]>([])
   const [attendance,  setAttendance]  = useState<AttendanceRecord | null>(null)
+  const [isCeo,       setIsCeo]       = useState(false)   // the CEO does not clock in
   const [jobCards,    setJobCards]    = useState<JobCard[]>([])
   const [monthHours,  setMonthHours]  = useState(0)
   const [loading,     setLoading]     = useState(true)
@@ -104,7 +105,7 @@ export default function EmployeeDashboard() {
         { data: cards },
         { data: attMonth },
       ] = await Promise.all([
-        supabase.from('profiles').select('full_name').eq('id', user.id).single(),
+        supabase.from('profiles').select('full_name, role').eq('id', user.id).single(),
         supabase.from('tasks').select('id,title,priority,status,due_date,projects(name)')
           .eq('assigned_to', user.id).neq('status', 'completed').neq('status', 'cancelled')
           .order('due_date', { ascending: true }).limit(5),
@@ -116,7 +117,7 @@ export default function EmployeeDashboard() {
           .gte('date', format(new Date(), 'yyyy-MM-01')),
       ])
 
-      if (prof)        setProfile(prof as unknown as { full_name: string })
+      if (prof)        { setProfile(prof as unknown as { full_name: string }); setIsCeo((prof as { role?: string }).role === 'admin') }
       if (todayTasks)  setTasks(todayTasks as unknown as Task[])
       if (todayAtt)    setAttendance(todayAtt as unknown as AttendanceRecord)
       if (cards)       setJobCards(cards as unknown as JobCard[])
@@ -152,7 +153,8 @@ export default function EmployeeDashboard() {
 
       <div className="flex-1 p-4 sm:p-6 space-y-6 max-w-6xl mx-auto w-full">
 
-        {/* Attendance status banner */}
+        {/* Attendance status banner (staff only) */}
+        {!isCeo && (
         <div className={`rounded-xl p-4 flex items-center justify-between ${isClockedIn ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'}`}>
           <div className="flex items-center gap-3">
             <MapPin size={20} className={isClockedIn ? 'text-green-600' : 'text-amber-600'} />
@@ -176,6 +178,7 @@ export default function EmployeeDashboard() {
             {isClockedIn ? 'Clock Out' : 'Clock In'}
           </Link>
         </div>
+        )}
 
         {/* Stat cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -256,7 +259,9 @@ export default function EmployeeDashboard() {
           <h3 className="font-semibold text-slate-900 text-sm mb-4">Quick Actions</h3>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
-              { label: 'Clock In / Out', href: '/staff/attendance', icon: '📍', color: 'bg-green-50 text-green-700 border-green-100' },
+              isCeo
+                ? { label: 'Team Attendance', href: '/staff/attendance', icon: '📍', color: 'bg-green-50 text-green-700 border-green-100' }
+                : { label: 'Clock In / Out', href: '/staff/attendance', icon: '📍', color: 'bg-green-50 text-green-700 border-green-100' },
               { label: 'View Tasks',     href: '/staff/tasks',       icon: '✓',  color: 'bg-blue-50 text-blue-700 border-blue-100' },
               { label: 'Job Cards',      href: '/staff/job-cards',   icon: '📋', color: 'bg-slate-50 text-slate-700 border-slate-200' },
               { label: 'Apply Leave',    href: '/staff/leave',       icon: '📅', color: 'bg-amber-50 text-amber-700 border-amber-100' },

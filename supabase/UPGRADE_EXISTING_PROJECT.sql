@@ -1426,7 +1426,8 @@ create trigger trg_attendance_guard before insert or update on attendance
 --  * Clock-in / clock-out only work from that approved phone, and only from a mobile browser.
 --  * Staff can no longer write attendance rows directly: everything goes through
 --    attendance_clock_in / attendance_clock_out, which check the phone, then the office GPS rules
---    (attendance_v1.sql) still apply. The CEO is not limited to a phone.
+--    (attendance_v1.sql) still apply.
+--  * The CEO does not clock in or out (manages attendance; can still correct records).
 -- The phone keeps a random secret; only its SHA-256 is stored here.
 -- Needs attendance_v1.sql first. Safe to run more than once.
 
@@ -1547,6 +1548,7 @@ returns uuid language plpgsql security definer set search_path = public as $$
 declare dev uuid; new_id uuid;
 begin
   if auth.uid() is null or not is_staff() then raise exception 'Please sign in again.'; end if;
+  if is_admin() then raise exception 'The CEO does not clock in or out.'; end if;
   dev := _check_attendance_device(p_device, p_secret);
   if exists (select 1 from attendance where employee_id = auth.uid() and date = (now() at time zone 'Asia/Kolkata')::date) then
     raise exception 'You have already clocked in today.';

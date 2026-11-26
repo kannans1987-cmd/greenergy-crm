@@ -101,13 +101,13 @@ select pg_temp.ok((select count(*) from trusted_devices) = 0, 'staff cannot see 
 select pg_temp.ok((select count(*) from office_locations) = 1, 'staff can see the office location');
 rollback;
 
--- ── CEO: no phone needed; can correct a record and hours follow ──
+-- ── CEO: does not clock in; can correct a record and hours follow ──
 begin; set local role authenticated; select pg_temp.act('00000000-0000-0000-0000-0000000a7c01', false);
-select attendance_clock_in(null, null, 'office', null, 11.9601, 79.8101, 10, 'office');
+select pg_temp.fails($q$select attendance_clock_in(null, null, 'office', null, 11.9601, 79.8101, 10, 'office')$q$, 'CEO clocks in');
 update attendance set clock_in_time = date_trunc('day', now()) + interval '9 hours', clock_out_time = date_trunc('day', now()) + interval '18 hours 30 minutes'
   where employee_id = '00000000-0000-0000-0000-0000000a7c02';
 commit;
 select pg_temp.ok((select total_hours = 9.5 and overtime_hours = 1.5 from attendance where employee_id = '00000000-0000-0000-0000-0000000a7c02'), 'CEO correction recalculates hours');
-select pg_temp.ok(exists (select 1 from attendance where employee_id = '00000000-0000-0000-0000-0000000a7c01'), 'CEO clocks in without a phone');
+select pg_temp.ok(not exists (select 1 from attendance where employee_id = '00000000-0000-0000-0000-0000000a7c01'), 'CEO has no attendance record');
 
 select 'ALL ATTENDANCE CHECKS PASSED';

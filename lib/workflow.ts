@@ -223,3 +223,31 @@ export function milestoneProgress(stages: { status: string; planned_date: string
   const overdue = live.filter(s => s.status !== 'completed' && s.planned_date && s.planned_date < t).length
   return { done, total: live.length, pct: live.length ? Math.round(done / live.length * 100) : 0, overdue }
 }
+
+// Milestone stages (same codes and order as project_stage_template() in the database),
+// used to say how far an ongoing project has already got
+export const STAGES: { code: string; name: string; phase: string; subsidy?: boolean }[] = [
+  { code: 'order_confirmed',      name: 'Order confirmed, advance received',              phase: 'Order & approvals' },
+  { code: 'site_survey',          name: 'Detailed site survey & shadow analysis',         phase: 'Order & approvals' },
+  { code: 'design',               name: 'Engineering design & BOM frozen',                phase: 'Order & approvals' },
+  { code: 'pmsg_application',     name: 'PM Surya Ghar application',                      phase: 'Order & approvals', subsidy: true },
+  { code: 'discom_application',   name: 'DISCOM feasibility / metering application',      phase: 'Order & approvals' },
+  { code: 'material_procurement', name: 'Materials ordered',                              phase: 'Procurement & installation' },
+  { code: 'material_delivery',    name: 'Materials delivered at site',                    phase: 'Procurement & installation' },
+  { code: 'structure_work',       name: 'Mounting structure erected',                     phase: 'Procurement & installation' },
+  { code: 'panel_installation',   name: 'Panels installed',                               phase: 'Procurement & installation' },
+  { code: 'inverter_electrical',  name: 'Inverter, cabling, earthing & LA',               phase: 'Procurement & installation' },
+  { code: 'testing',              name: 'Pre-commissioning tests',                        phase: 'Procurement & installation' },
+  { code: 'discom_inspection',    name: 'Work completion report & DISCOM inspection',     phase: 'Grid connection' },
+  { code: 'net_meter_sync',       name: 'Net meter installed & grid synchronised',        phase: 'Grid connection' },
+  { code: 'commissioning',        name: 'Commissioning certificate issued',               phase: 'Grid connection' },
+  { code: 'subsidy_claim',        name: 'Subsidy claim submitted',                        phase: 'Subsidy', subsidy: true },
+  { code: 'central_subsidy',      name: 'Central subsidy credited',                       phase: 'Subsidy', subsidy: true },
+  { code: 'state_subsidy',        name: 'State subsidy claimed & credited',               phase: 'Subsidy', subsidy: true },
+  { code: 'final_payment',        name: 'Final payment received',                         phase: 'Handover' },
+  { code: 'handover',             name: 'Handover to customer',                           phase: 'Handover' },
+  { code: 'warranty_registration', name: 'Warranties registered',                         phase: 'Handover' },
+  { code: 'first_service',        name: 'First maintenance visit',                        phase: 'Service life' },
+  { code: 'maintenance_contract', name: 'Maintenance contract running',                   phase: 'Service life' },
+  { code: 'end_of_life',          name: 'Decommissioning / recycling',                    phase: 'End of life' },
+]

@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import Header from '@/components/staff/Header'
 import Link from 'next/link'
-import { Briefcase, MapPin } from 'lucide-react'
+import { Briefcase, MapPin, Plus } from 'lucide-react'
 import { milestoneProgress } from '@/lib/workflow'
 
 interface ProjectItem {
@@ -19,6 +19,8 @@ const STATUS_COLORS: Record<string, string> = {
 export default async function ProjectsPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
+  const { data: me } = await supabase.from('profiles').select('role').eq('id', user?.id ?? '').single()
+  const mgr = me?.role === 'admin' || me?.role === 'task_manager'
 
   // Row-level security returns the projects this person may see: managers all;
   // others where they are the appointed officer, on the team, or made the sale.
@@ -40,7 +42,13 @@ export default async function ProjectsPage() {
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Header title="Projects & milestones" subtitle="Numbered job cards from accepted, hot quotations — tracked from order to end of life" />
-      <div className="flex-1 p-4 sm:p-6 max-w-6xl mx-auto w-full">
+      <div className="flex-1 p-4 sm:p-6 max-w-6xl mx-auto w-full space-y-4">
+        {mgr && (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-slate-500">{projects.filter(p => !p.job_number).length ? <span className="text-amber-700">{projects.filter(p => !p.job_number).length} project(s) without a numbered job card — open one to create it.</span> : null}</p>
+            <Link href="/staff/projects/ongoing" className="flex items-center gap-1.5 px-4 py-2 bg-emerald-700 text-white text-sm font-semibold rounded-lg hover:bg-emerald-800"><Plus size={15} /> Add ongoing project</Link>
+          </div>
+        )}
         {projects.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-100 p-16 text-center">
             <Briefcase size={40} className="mx-auto mb-3 text-slate-300" />
@@ -56,7 +64,7 @@ export default async function ProjectsPage() {
                 <Link key={proj.id} href={`/staff/projects/${proj.id}`} className="bg-white rounded-xl border border-slate-100 shadow-sm hover:shadow-md transition p-5 block">
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div>
-                      <p className="text-xs text-slate-400 font-mono">{proj.job_number ?? proj.project_number}</p>
+                      <p className="text-xs text-slate-400 font-mono">{proj.job_number ?? proj.project_number}{!proj.job_number && <span className="ml-2 font-sans font-semibold text-amber-600">No job card</span>}</p>
                       <h4 className="font-bold text-slate-900 text-sm mt-0.5">{proj.customer_name ?? proj.name}</h4>
                     </div>
                     <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${STATUS_COLORS[proj.status] ?? 'bg-slate-100 text-slate-600'}`}>{proj.status.replace('_', ' ')}</span>

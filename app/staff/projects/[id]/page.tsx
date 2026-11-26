@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Loader2, Printer, CheckCircle, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import OngoingJobCardForm from '@/components/staff/OngoingJobCardForm'
 import { STAGE_STATUS_LABELS, milestoneProgress, inr, todayIso, isManager, REGION_LABELS, type Role } from '@/lib/workflow'
 
 interface Stage { id: string; stage_code: string; stage_name: string; phase: string | null; sort_order: number; status: string
@@ -11,7 +12,8 @@ interface Stage { id: string; stage_code: string; stage_name: string; phase: str
 interface Payment { id: string; milestone_name: string; percentage: number | null; amount: number; status: string; paid_date: string | null; payment_mode: string | null; reference_number: string | null }
 interface Project { id: string; project_number: string; job_number: string | null; name: string; customer_name: string | null; customer_mobile: string | null
   site_address: string | null; capacity_kwp: number | null; project_type: string | null; region: string | null; subsidy_job: boolean; order_value: number | null
-  status: string; start_date: string | null; target_commissioning: string | null; notes: string | null; quotation_id: string | null; admin_officer_id: string | null }
+  status: string; start_date: string | null; target_commissioning: string | null; notes: string | null; quotation_id: string | null; admin_officer_id: string | null
+  legacy_ref?: string | null; onboarded_at?: string | null }
 interface Person { id: string; full_name: string; role: Role }
 
 const INPUT = 'border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm w-full bg-white disabled:bg-slate-50 disabled:text-slate-500'
@@ -104,7 +106,8 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
         <div className="max-w-7xl mx-auto flex items-center gap-3 flex-wrap">
           <Link href="/staff/projects" className="p-2 hover:bg-slate-100 rounded-lg print:hidden" aria-label="Back to projects"><ArrowLeft size={18} /></Link>
           <div><p className="text-xs text-slate-400 font-mono">{p.project_number}</p>
-            <h1 className="font-bold text-slate-900">{p.job_number ?? 'Project'} · {p.customer_name}</h1></div>
+            <h1 className="font-bold text-slate-900">{p.job_number ?? 'Project'} · {p.customer_name}</h1>
+            {p.legacy_ref && <p className="text-xs text-slate-500">Old job card: {p.legacy_ref}</p>}</div>
           <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100">{PROJECT_STATUS[p.status] ?? p.status}</span>
           <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 print:hidden"><Printer size={13} /> Print job card</button>
         </div>
@@ -113,6 +116,13 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
       {msg && <div role="status" className={`fixed top-16 right-4 z-50 px-4 py-3 rounded-xl shadow-xl text-sm text-white flex gap-2 ${msg.ok ? 'bg-green-600' : 'bg-red-600'}`}>{msg.ok ? <CheckCircle size={15} /> : <AlertTriangle size={15} />}{msg.t}</div>}
 
       <div className="flex-1 p-4 sm:p-6 max-w-7xl mx-auto w-full space-y-5">
+        {!p.job_number && isManager(me.role) && (
+          <div className={`${CARD} p-5 border-amber-200 print:hidden`}>
+            <h2 className="font-semibold text-sm text-amber-900">This project has no numbered job card yet</h2>
+            <p className="text-xs text-slate-500 mb-4">It was started before the CRM or without a quotation. Fill in what you know and the CRM issues the job card, marks the milestones already finished and records the payment received so far.</p>
+            <OngoingJobCardForm project={p} role={me.role} onDone={() => { say('Job card created'); load() }} />
+          </div>
+        )}
         <div className={`${CARD} p-5 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm`}>
           <div><p className="text-xs text-slate-400">System</p><p className="font-semibold">{p.capacity_kwp ?? '—'} kW {p.project_type ?? ''}</p></div>
           <div><p className="text-xs text-slate-400">Order value (incl. GST)</p><p className="font-semibold">{inr(p.order_value)}</p></div>

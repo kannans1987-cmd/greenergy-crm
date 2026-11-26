@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { ArrowLeft, Loader2, Printer, CheckCircle, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import OngoingJobCardForm from '@/components/staff/OngoingJobCardForm'
+import DeleteProjectButton from '@/components/staff/DeleteProjectButton'
 import { STAGE_STATUS_LABELS, milestoneProgress, inr, todayIso, isManager, REGION_LABELS, type Role } from '@/lib/workflow'
 
 interface Stage { id: string; stage_code: string; stage_name: string; phase: string | null; sort_order: number; status: string
@@ -109,7 +110,8 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
             <h1 className="font-bold text-slate-900">{p.job_number ?? 'Project'} · {p.customer_name}</h1>
             {p.legacy_ref && <p className="text-xs text-slate-500">Old job card: {p.legacy_ref}</p>}</div>
           <span className="px-2.5 py-1 rounded-full text-[11px] font-bold bg-slate-100">{PROJECT_STATUS[p.status] ?? p.status}</span>
-          <button onClick={() => window.print()} className="ml-auto flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 print:hidden"><Printer size={13} /> Print job card</button>
+          {ceo && !p.job_number && !p.quotation_id && <span className="ml-auto"><DeleteProjectButton id={p.id} label={`${p.project_number} · ${p.customer_name ?? p.name}`} /></span>}
+          <button onClick={() => window.print()} className={`${ceo && !p.job_number && !p.quotation_id ? "" : "ml-auto "}flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-slate-100 print:hidden`}><Printer size={13} /> Print job card</button>
         </div>
       </div>
 

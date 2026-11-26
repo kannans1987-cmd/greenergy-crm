@@ -21,3 +21,5 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 `lead_temperature_v1_test.sql` checks hot / cold at any stage; it ends with `ALL HOT / COLD CHECKS PASSED`.
 
 `job_card_ongoing_v1_test.sql` checks job cards for ongoing projects; it ends with `ALL ONGOING JOB CARD CHECKS PASSED`.
+
+`project_delete_v1_test.sql` checks who may delete a project and what is kept; it ends with `ALL PROJECT DELETE CHECKS PASSED`.

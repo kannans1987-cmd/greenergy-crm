@@ -27,77 +27,8 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(data)
 }
 
-export async function POST(req: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const body = await req.json()
-  const { project_id, clock_in_lat, clock_in_lng, clock_in_address, clock_in_accuracy_m } = body
-  const work_type = body.work_type === 'office' ? 'office' : 'site'
-
-  if (!clock_in_lat || !clock_in_lng) {
-    return NextResponse.json({ error: 'GPS coordinates are required for clock-in.' }, { status: 400 })
-  }
-
-  // India date; the database sets the final date and time itself and checks the office distance
-  const today = new Date(Date.now() + 5.5 * 3600_000).toISOString().split('T')[0]
-
-  // Check if already clocked in today
-  const { data: existing } = await supabase.from('attendance')
-    .select('id,clock_out_time').eq('employee_id', user.id).eq('date', today).maybeSingle()
-
-  if (existing && !existing.clock_out_time) {
-    return NextResponse.json({ error: 'You are already clocked in. Please clock out first.' }, { status: 409 })
-  }
-
-  const { data, error } = await supabase.from('attendance').insert({
-    employee_id:      user.id,
-    work_type,
-    project_id:       work_type === 'site' ? (project_id || null) : null,
-    clock_in_accuracy_m: clock_in_accuracy_m ?? null,
-    date:             today,
-    clock_in_time:    new Date().toISOString(),
-    clock_in_lat,
-    clock_in_lng,
-    clock_in_address: clock_in_address || null,
-    attendance_status:'present',
-  }).select('*,projects(name),office_locations(name)').single()
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 })
-  return NextResponse.json(data, { status: 201 })
-}
-
-export async function PATCH(req: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const body = await req.json()
-  const { id, clock_out_lat, clock_out_lng, clock_out_accuracy_m, remarks } = body
-
-  if (!id) return NextResponse.json({ error: 'Attendance id required.' }, { status: 400 })
-
-  // Fetch the record to calculate hours
-  const { data: record } = await supabase.from('attendance').select('clock_in_time').eq('id', id).eq('employee_id', user.id).single()
-  if (!record) return NextResponse.json({ error: 'Record not found.' }, { status: 404 })
-
-  const now       = new Date()
-  const clockIn   = new Date(record.clock_in_time)
-  const totalMins = Math.round((now.getTime() - clockIn.getTime()) / 60000)
-  const totalHrs  = Math.round((totalMins / 60) * 100) / 100
-  const overtime  = Math.max(0, Math.round(((totalMins - 480) / 60) * 100) / 100)
-
-  const { data, error } = await supabase.from('attendance').update({
-    clock_out_time: now.toISOString(),
-    clock_out_lat:  clock_out_lat  ?? null,
-    clock_out_lng:  clock_out_lng  ?? null,
-    clock_out_accuracy_m: clock_out_accuracy_m ?? null,
-    total_hours:    totalHrs,
-    overtime_hours: overtime,
-    remarks:        remarks ?? null,
-  }).eq('id', id).select('*,projects(name)').single()
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json(data)
-}
+// Clock-in / clock-out are only done from the Attendance page on the person's approved phone
+// (database functions attendance_clock_in / attendance_clock_out check the phone and the GPS).
+const gone = () => NextResponse.json({ error: 'Clock in and out from the Attendance page on your approved mobile phone.' }, { status: 410 })
+export async function POST() { return gone() }
+export async function PATCH() { return gone() }

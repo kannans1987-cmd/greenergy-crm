@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format, differenceInMinutes } from 'date-fns'
-import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2 } from 'lucide-react'
+import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2, Smartphone } from 'lucide-react'
 
 // Office staff clock in at the office (GPS must be inside the office radius — the database checks it).
 // Site staff clock in on their project. Managers see everyone's day; the CEO sets the office location.
@@ -101,8 +101,57 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
 
 function friendly(msg: string) {
   if (/attendance_one_per_day|duplicate key/i.test(msg)) return 'You have already clocked in today.'
-  if (/work_type|office_location|clock_in_accuracy|clock_out_accuracy|schema cache/i.test(msg)) return 'The attendance database update has not been run yet. Ask the CEO to run supabase/attendance_v1.sql in Supabase.'
+  if (/work_type|office_location|clock_in_accuracy|clock_out_accuracy|trusted_devices|attendance_clock|register_attendance|schema cache|Could not find the function/i.test(msg))
+    return 'The attendance database update has not been run yet. Ask the CEO to run supabase/attendance_devices_v1.sql in Supabase.'
   return msg
+}
+
+// ── Trusted phone ──
+// This phone's id + secret live only on the phone (browser storage, with a cookie as a backup).
+// The database keeps a hash of the secret, so the id alone cannot be used from another phone.
+type DeviceKey = { id: string; secret: string }
+interface Device { id: string; employee_id: string; label: string | null; status: string; created_at: string; last_used_at: string | null; employee?: { full_name: string } | null }
+const DEVICE_KEY = 'gss-attendance-device'
+
+function readDeviceKey(): DeviceKey | null {
+  try {
+    const raw = localStorage.getItem(DEVICE_KEY)
+      ?? decodeURIComponent(document.cookie.split('; ').find(c => c.startsWith(DEVICE_KEY + '='))?.split('=')[1] ?? '')
+    const k = raw ? JSON.parse(raw) : null
+    if (k?.id && k?.secret) { saveDeviceKey(k); return k }
+  } catch { /* nothing stored */ }
+  return null
+}
+
+function saveDeviceKey(k: DeviceKey) {
+  const v = JSON.stringify(k)
+  try { localStorage.setItem(DEVICE_KEY, v) } catch { /* private mode */ }
+  document.cookie = `${DEVICE_KEY}=${encodeURIComponent(v)}; max-age=${400 * 86400}; path=/; samesite=strict; secure`
+  navigator.storage?.persist?.().catch(() => {})
+}
+
+function newSecret() {
+  const b = new Uint8Array(32)
+  crypto.getRandomValues(b)
+  return Array.from(b, x => x.toString(16).padStart(2, '0')).join('')
+}
+
+function isPhone() {
+  const ua = navigator.userAgent
+  return /Android|iPhone|iPod|Mobile/i.test(ua) && !/iPad|Tablet/i.test(ua)
+}
+
+async function phoneLabel() {
+  const ua = navigator.userAgent
+  const browser = /CriOS|Chrome/i.test(ua) ? 'Chrome' : /FxiOS|Firefox/i.test(ua) ? 'Firefox' : /SamsungBrowser/i.test(ua) ? 'Samsung Internet' : /Safari/i.test(ua) ? 'Safari' : 'Browser'
+  if (/iPhone/i.test(ua)) return `iPhone · ${browser}`
+  let model = ''
+  try {
+    const uad = (navigator as unknown as { userAgentData?: { getHighEntropyValues(h: string[]): Promise<{ model?: string }> } }).userAgentData
+    model = (await uad?.getHighEntropyValues(['model']))?.model ?? ''
+  } catch { /* not available */ }
+  if (!model) model = ua.match(/Android [\d.]+; ([^;)]+)/)?.[1]?.trim() ?? ''
+  return `${model && model !== 'K' ? model : 'Android phone'} · ${browser}`
 }
 
 export default function AttendancePage() {
@@ -132,10 +181,67 @@ export default function AttendancePage() {
   const [officeBusy, setOfficeBusy] = useState(false)
   const [manual,     setManual]     = useState('')
 
+  // Trusted phone
+  const [deviceKey,  setDeviceKey]  = useState<DeviceKey | null>(null)
+  const [myDevices,  setMyDevices]  = useState<Device[]>([])
+  const [allDevices, setAllDevices] = useState<Device[]>([])
+  const [onPhone,    setOnPhone]    = useState(true)
+  const [devBusy,    setDevBusy]    = useState(false)
+  const [devMsg,     setDevMsg]     = useState('')
+
   const today     = format(new Date(), 'yyyy-MM-dd')
   const isManager = role === 'admin' || role === 'task_manager'
   const isCeo     = role === 'admin'
   const activeOffices = offices.filter(o => o.active)
+
+  // What this phone is, for this person
+  const thisDevice   = deviceKey ? myDevices.find(d => d.id === deviceKey.id) : undefined
+  const approvedElse = myDevices.find(d => d.status === 'approved' && d.id !== deviceKey?.id)
+  const phoneState: 'ceo' | 'computer' | 'approved' | 'pending' | 'none' =
+    isCeo ? 'ceo' : !onPhone ? 'computer' : thisDevice?.status === 'approved' ? 'approved' : thisDevice?.status === 'pending' ? 'pending' : 'none'
+  const canClock = phoneState === 'ceo' || phoneState === 'approved'
+
+  const loadDevices = useCallback(async (uid: string, ceo: boolean) => {
+    const { data } = await supabase.from('trusted_devices').select('id,employee_id,label,status,created_at,last_used_at')
+      .eq('employee_id', uid).order('created_at', { ascending: false })
+    setMyDevices((data as Device[]) ?? [])
+    if (ceo) {
+      const { data: all } = await supabase.from('trusted_devices')
+        .select('id,employee_id,label,status,created_at,last_used_at,employee:profiles!trusted_devices_employee_id_fkey(full_name)')
+        .in('status', ['pending', 'approved']).order('created_at', { ascending: false })
+      setAllDevices((all as unknown as Device[]) ?? [])
+    }
+  }, [])
+
+  useEffect(() => { setDeviceKey(readDeviceKey()); setOnPhone(isPhone()) }, [])
+
+  const registerPhone = async () => {
+    if (approvedElse && !window.confirm(`Your approved attendance phone is "${approvedElse.label}". Register THIS phone instead? Once the CEO approves it, the old phone stops working for attendance.`)) return
+    setDevBusy(true); setDevMsg('')
+    try {
+      const secret = newSecret()
+      const label = await phoneLabel()
+      const { data, error } = await supabase.rpc('register_attendance_device', { p_secret: secret, p_label: label })
+      if (error) throw new Error(friendly(error.message))
+      const k = { id: data as string, secret }
+      saveDeviceKey(k); setDeviceKey(k)
+      setDevMsg('✅ Sent to the CEO for approval. You can clock in from this phone once it is approved.')
+      if (userId) loadDevices(userId, isCeo)
+    } catch (err: unknown) {
+      setDevMsg(`❌ ${err instanceof Error ? err.message : 'Failed'}`)
+    } finally { setDevBusy(false) }
+  }
+
+  const decideDevice = async (d: Device, s: 'approved' | 'rejected' | 'revoked') => {
+    const who = d.employee?.full_name ?? 'this person'
+    const q = s === 'approved' ? `Approve "${d.label}" as the attendance phone of ${who}? Any other phone of theirs stops working for attendance.`
+      : s === 'revoked' ? `Remove "${d.label}" from ${who}? They cannot clock in until a new phone is approved.`
+      : `Reject "${d.label}" from ${who}?`
+    if (!window.confirm(q)) return
+    const { error } = await supabase.rpc('decide_attendance_device', { p_id: d.id, p_status: s })
+    setDevMsg(error ? `❌ ${friendly(error.message)}` : `✅ ${who}: phone ${s}`)
+    if (userId) loadDevices(userId, true)
+  }
 
   useEffect(() => {
     if (!todayRecord?.clock_in_time || todayRecord.clock_out_time) return
@@ -158,13 +264,14 @@ export default function AttendancePage() {
       supabase.from('attendance').select(SELECT).eq('employee_id', uid).order('date', { ascending: false }).limit(10),
     ])
     if (me?.role) setRole(me.role)
+    loadDevices(uid, me?.role === 'admin')
     const proj = ((myProjects ?? []) as unknown as { projects: Project | null }[]).map(r => r.projects).filter(Boolean) as Project[]
     setProjects(proj)
     setTodayRecord((todayAtt as AttendanceRecord) ?? null)
     setHistory((hist as AttendanceRecord[]) ?? [])
     await loadOffices()
     setPageLoading(false)
-  }, [today, loadOffices])
+  }, [today, loadOffices, loadDevices])
 
   const loadTeam = useCallback(async (date: string) => {
     const [{ data: people }, { data: rows }] = await Promise.all([
@@ -205,19 +312,18 @@ export default function AttendancePage() {
       }
       say('Capturing address…', 'info')
       const address = await reverseGeocode(fix.latitude, fix.longitude)
-      const { data, error } = await supabase.from('attendance').insert({
-        employee_id:         userId,
-        work_type:           workType,
-        project_id:          workType === 'site' ? selectedProject : null,
-        date:                today,
-        clock_in_time:       new Date().toISOString(),
-        clock_in_lat:        fix.latitude,
-        clock_in_lng:        fix.longitude,
-        clock_in_accuracy_m: fix.accuracy,
-        clock_in_address:    address,
-        attendance_status:   'present',
-      }).select(SELECT).single()
+      const { data: newId, error } = await supabase.rpc('attendance_clock_in', {
+        p_device:    deviceKey?.id ?? null,
+        p_secret:    deviceKey?.secret ?? null,
+        p_work_type: workType,
+        p_project:   workType === 'site' ? selectedProject : null,
+        p_lat:       fix.latitude,
+        p_lng:       fix.longitude,
+        p_accuracy:  fix.accuracy,
+        p_address:   address,
+      })
       if (error) throw new Error(friendly(error.message))
+      const { data } = await supabase.from('attendance').select(SELECT).eq('id', newId as string).single()
       const rec = data as AttendanceRecord
       setTodayRecord(rec)
       say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`, 'success')
@@ -240,14 +346,16 @@ export default function AttendancePage() {
         if (!window.confirm(`${e instanceof Error ? e.message : 'No location'}\n\nClock out without location? It will be marked for the CEO to check.`)) throw e
       }
       const address = fix ? await reverseGeocode(fix.latitude, fix.longitude) : null
-      const { data, error } = await supabase.from('attendance').update({
-        clock_out_time:       new Date().toISOString(),
-        clock_out_lat:        fix?.latitude ?? null,
-        clock_out_lng:        fix?.longitude ?? null,
-        clock_out_accuracy_m: fix?.accuracy ?? null,
-        clock_out_address:    address,
-      }).eq('id', todayRecord.id).select(SELECT).single()
+      const { data: recId, error } = await supabase.rpc('attendance_clock_out', {
+        p_device:   deviceKey?.id ?? null,
+        p_secret:   deviceKey?.secret ?? null,
+        p_lat:      fix?.latitude ?? null,
+        p_lng:      fix?.longitude ?? null,
+        p_accuracy: fix?.accuracy ?? null,
+        p_address:  address,
+      })
       if (error) throw new Error(friendly(error.message))
+      const { data } = await supabase.from('attendance').select(SELECT).eq('id', recId as string).single()
       const rec = data as AttendanceRecord
       setTodayRecord(rec)
       say(`Clocked out. Total: ${Number(rec.total_hours ?? 0).toFixed(1)} hrs worked.`, 'success')
@@ -332,6 +440,39 @@ export default function AttendancePage() {
       <Header title="Attendance" subtitle="GPS Clock-In / Clock-Out" />
 
       <div className="flex-1 p-4 sm:p-6 max-w-4xl mx-auto w-full space-y-6">
+
+        {/* Trusted phone */}
+        {phoneState !== 'ceo' && (
+          <div className={`rounded-2xl border p-4 flex items-start gap-3 ${
+            phoneState === 'approved' ? 'bg-green-50 border-green-100' : phoneState === 'pending' ? 'bg-blue-50 border-blue-100' : 'bg-amber-50 border-amber-200'}`}>
+            <Smartphone size={22} className={`shrink-0 mt-0.5 ${phoneState === 'approved' ? 'text-green-600' : phoneState === 'pending' ? 'text-blue-600' : 'text-amber-600'}`} />
+            <div className="flex-1 text-sm space-y-2">
+              {phoneState === 'approved' && (
+                <p className="text-green-800"><b>This is your approved attendance phone</b> ({thisDevice?.label}).</p>
+              )}
+              {phoneState === 'pending' && (
+                <p className="text-blue-800"><b>Waiting for the CEO to approve this phone</b> ({thisDevice?.label}). You can clock in here once it is approved.</p>
+              )}
+              {phoneState === 'computer' && (
+                <p className="text-amber-800"><b>Attendance can only be marked from your registered mobile phone.</b> Open the CRM on your phone to clock in or out.</p>
+              )}
+              {phoneState === 'none' && (<>
+                <p className="text-amber-800">
+                  <b>{approvedElse ? 'This is not your approved attendance phone.' : 'Register this phone for attendance.'}</b>{' '}
+                  {approvedElse
+                    ? `Your approved phone is "${approvedElse.label}". If you changed phones, register this one and the CEO will approve it.`
+                    : 'You can only clock in from one phone, approved by the CEO. Do this on the phone you carry to work every day.'}
+                </p>
+                <button onClick={registerPhone} disabled={devBusy}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 disabled:opacity-50">
+                  {devBusy ? 'Registering…' : 'Register this phone'}
+                </button>
+                <p className="text-xs text-amber-700">Always open the CRM in the same browser on this phone. Clearing the browser’s history / website data means registering again.</p>
+              </>)}
+              {devMsg && !isCeo && <p className="text-slate-700">{devMsg}</p>}
+            </div>
+          </div>
+        )}
 
         {/* Clock-in card */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -421,7 +562,7 @@ export default function AttendancePage() {
 
                 <button
                   onClick={isClockedIn ? handleClockOut : handleClockIn}
-                  disabled={loading || (!isClockedIn && workType === 'site' && !selectedProject) || (!isClockedIn && workType === 'office' && activeOffices.length === 0)}
+                  disabled={loading || !canClock || (!isClockedIn && workType === 'site' && !selectedProject) || (!isClockedIn && workType === 'office' && activeOffices.length === 0)}
                   className={`w-full py-4 rounded-xl font-bold text-white text-lg transition-all disabled:opacity-50 flex items-center justify-center gap-3 shadow-lg ${
                     isClockedIn ? 'bg-red-500 hover:bg-red-600 shadow-red-200' : 'bg-green-600 hover:bg-green-700 shadow-green-200'}`}>
                   {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -494,6 +635,43 @@ export default function AttendancePage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* CEO: attendance phones */}
+        {isCeo && (
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5 space-y-3">
+            <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
+              <Smartphone size={16} className="text-green-600" /> Attendance phones
+              {allDevices.some(d => d.status === 'pending') && (
+                <span className="text-xs bg-amber-100 text-amber-800 rounded-full px-2 py-0.5">{allDevices.filter(d => d.status === 'pending').length} waiting</span>)}
+            </h3>
+            <p className="text-xs text-slate-500">Each person can clock in only from the one phone you approve here. Approve a phone only when you know it is theirs (for example, they registered it in front of you).</p>
+            {allDevices.length === 0 ? <p className="text-sm text-slate-400">No phones registered yet.</p> : (
+              <div className="divide-y divide-slate-50">
+                {allDevices.map(d => (
+                  <div key={d.id} className="py-2.5 flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-sm">
+                      <p className="font-medium text-slate-800">{d.employee?.full_name ?? '—'}</p>
+                      <p className="text-xs text-slate-500">{d.label} · registered {format(new Date(d.created_at), 'dd MMM, hh:mm a')}
+                        {d.last_used_at && ` · last used ${format(new Date(d.last_used_at), 'dd MMM')}`}</p>
+                    </div>
+                    {d.status === 'pending' ? (
+                      <div className="flex gap-2">
+                        <button onClick={() => decideDevice(d, 'approved')} className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700">Approve</button>
+                        <button onClick={() => decideDevice(d, 'rejected')} className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg hover:bg-slate-50">Reject</button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-green-700 bg-green-50 rounded-full px-2 py-0.5">Approved</span>
+                        <button onClick={() => decideDevice(d, 'revoked')} className="px-3 py-1.5 text-xs text-red-600 border border-red-100 rounded-lg hover:bg-red-50">Remove</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {devMsg && <p className="text-sm text-slate-700">{devMsg}</p>}
           </div>
         )}
 

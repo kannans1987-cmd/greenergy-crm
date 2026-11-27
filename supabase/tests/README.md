@@ -33,3 +33,5 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 `service_v1_test.sql` checks AMC contracts and visits, service jobs, technician rights, invoices and O&M clock-in on a job; it ends with `ALL SERVICE CHECKS PASSED`.
 
 `attendance_outside_v1_test.sql` checks "Out on work" sessions (site visits for leads, EB office, purchases, bank / govt office): purpose and note rules, links only to the person's own leads / projects, and that the purpose cannot be changed later; it ends with `ALL OUT-ON-WORK ATTENDANCE CHECKS PASSED`.
+
+`attendance_forgot_v1_test.sql` checks forgotten clock-outs: yesterday's open session does not block today, is not closed by today's clock-out, the CEO is told once and sets the real time; it ends with `ALL FORGOTTEN CLOCK-OUT CHECKS PASSED`.

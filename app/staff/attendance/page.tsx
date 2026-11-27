@@ -61,15 +61,23 @@ function distanceM(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
 
 const mapLink = (lat: number, lng: number) => `https://www.google.com/maps?q=${lat},${lng}`
 
+// The street address is a nice-to-have: give up after 6 s and keep the coordinates
 async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 6000)
   try {
-    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, { headers: { 'Accept-Language': 'en' } })
+    const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json`, { headers: { 'Accept-Language': 'en' }, signal: ctrl.signal })
     const data = await res.json()
     return data.display_name ?? `${lat.toFixed(5)}, ${lng.toFixed(5)}`
   } catch {
     return `${lat.toFixed(5)}, ${lng.toFixed(5)}`
-  }
+  } finally { clearTimeout(timer) }
 }
+
+// Same rule as the database (attendance_forgot_v1.sql): an open session is "current" if it is from
+// today or started under 8 hours ago (a shift past midnight). Older open sessions were forgotten.
+const isCurrentSession = (r: { date: string; clock_in_time: string }, today: string) =>
+  r.date === today || Date.now() - new Date(r.clock_in_time).getTime() < 8 * 3600 * 1000
 
 function friendly(msg: string) {
   if (/p_purpose|p_quotation|attendance_purpose|purpose_note/i.test(msg))
@@ -155,7 +163,12 @@ export default function AttendancePage() {
   const [elapsed,         setElapsed]         = useState('')
 
   // Managers: team view
-  const [teamDate, setTeamDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [teamDate, setTeamDate] = useState(() => {
+    const d = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('date') : null
+    return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : format(new Date(), 'yyyy-MM-dd')
+  })
+  const [pastOpen,  setPastOpen]  = useState<AttendanceRecord | null>(null)
+  const [forgotten, setForgotten] = useState<(AttendanceRecord & { employee?: { full_name: string } | null })[]>([])
   const [staff,    setStaff]    = useState<Staff[]>([])
   const [teamRows, setTeamRows] = useState<AttendanceRecord[]>([])
   const [modeMsg,  setModeMsg]  = useState('')
@@ -228,7 +241,9 @@ export default function AttendancePage() {
   }
 
   // Today's sessions (office staff: at most one; site / O&M staff: one per visit)
-  const openRec     = todayRecs.find(r => r.clock_in_time && !r.clock_out_time) ?? null
+  const pastCurrent = pastOpen && isCurrentSession(pastOpen, today) ? pastOpen : null
+  const pastForgot  = pastOpen && !pastCurrent ? pastOpen : null
+  const openRec     = todayRecs.find(r => r.clock_in_time && !r.clock_out_time) ?? pastCurrent
   const lastRec     = todayRecs[todayRecs.length - 1] ?? null
   const todayRecord = openRec ?? lastRec
   const todayHours  = todayRecs.reduce((t, r) => t + Number(r.total_hours ?? 0), 0)
@@ -262,6 +277,9 @@ export default function AttendancePage() {
     const proj = ((myProjects ?? []) as unknown as { projects: Project | null }[]).map(r => r.projects).filter(Boolean) as Project[]
     setProjects(proj)
     setTodayRecs((todayAtt as AttendanceRecord[]) ?? [])
+    const { data: po } = await supabase.from('attendance').select(SELECT).eq('employee_id', uid).lt('date', today)
+      .is('clock_out_time', null).order('clock_in_time', { ascending: false }).limit(1)
+    setPastOpen(((po as AttendanceRecord[]) ?? [])[0] ?? null)
     setHistory((hist as AttendanceRecord[]) ?? [])
     // Service jobs given to this person (service_v1.sql); none before that update
     const { data: tk } = await supabase.from('service_tickets').select('id, ticket_number, customer_name, site_address, kind')
@@ -286,6 +304,9 @@ export default function AttendancePage() {
     ])
     setStaff((people as Staff[]) ?? [])
     setTeamRows((rows as AttendanceRecord[]) ?? [])
+    const { data: fg } = await supabase.from('attendance').select(SELECT).lt('date', format(new Date(), 'yyyy-MM-dd'))
+      .is('clock_out_time', null).order('clock_in_time')
+    setForgotten((fg as AttendanceRecord[]) ?? [])
   }, [])
 
   useEffect(() => {
@@ -390,6 +411,22 @@ export default function AttendancePage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // ── CEO: set the clock-out time of a forgotten session ──
+  const [fixMsg, setFixMsg] = useState('')
+  const fixClockOut = async (r: AttendanceRecord, who: string) => {
+    const day = format(new Date(r.date + 'T12:00:00'), 'dd MMM')
+    const ans = window.prompt(`${who} clocked in on ${day} at ${fmtT(r.clock_in_time)} and did not clock out.\n\nWhat time did they leave on ${day}? (24-hour, e.g. 18:30 or 21:15)`)
+    if (!ans) return
+    const m = ans.trim().match(/^(\d{1,2})[:.](\d{2})$/)
+    if (!m || +m[1] > 23 || +m[2] > 59) { setFixMsg('❌ Type the time like 18:30.'); return }
+    const out = new Date(`${r.date}T${m[1].padStart(2, '0')}:${m[2]}:00+05:30`)
+    if (out <= new Date(r.clock_in_time)) { setFixMsg(`❌ The clock-out must be after the clock-in (${fmtT(r.clock_in_time)}). For a shift that ended after midnight, change it in Supabase.`); return }
+    if (out > new Date()) { setFixMsg('❌ That time has not happened yet.'); return }
+    const { error } = await supabase.from('attendance').update({ clock_out_time: out.toISOString() }).eq('id', r.id)
+    setFixMsg(error ? `❌ ${error.message}` : `✅ ${who}, ${day}: clocked out at ${format(out, 'hh:mm a')} (${((out.getTime() - new Date(r.clock_in_time).getTime()) / 3600000).toFixed(1)} h)`)
+    loadTeam(teamDate)
   }
 
   // ── CEO: attendance type per person ──
@@ -510,6 +547,16 @@ export default function AttendancePage() {
               </>)}
               {devMsg && !isCeo && <p className="text-slate-700">{devMsg}</p>}
             </div>
+          </div>
+        )}
+
+        {!isCeo && pastForgot && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 flex gap-3">
+            <AlertTriangle size={20} className="shrink-0 text-amber-600 mt-0.5" />
+            <p>
+              <b>You did not clock out on {format(new Date(pastForgot.date + 'T12:00:00'), 'dd MMM')}</b> (clocked in at {fmtT(pastForgot.clock_in_time)}).
+              The CEO has been told and will set the time you left. You can clock in for today as normal.
+            </p>
           </div>
         )}
 
@@ -701,6 +748,23 @@ export default function AttendancePage() {
 
         )}
 
+        {/* CEO: sessions nobody clocked out of */}
+        {isCeo && (forgotten.length > 0 || fixMsg) && (
+          <div className="bg-amber-50 rounded-xl border border-amber-200 p-4 space-y-2">
+            <h3 className="font-semibold text-amber-900 text-sm flex items-center gap-2"><AlertTriangle size={16} /> Forgot to clock out</h3>
+            {forgotten.map(r => {
+              const who = staff.find(p => p.id === r.employee_id)?.full_name ?? 'Staff'
+              return (
+                <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 bg-white rounded-lg border border-amber-100 px-3 py-2 text-sm">
+                  <span><b>{who}</b> · {format(new Date(r.date + 'T12:00:00'), 'dd MMM')} · in at {fmtT(r.clock_in_time)} · {placeOf(r)}</span>
+                  <button onClick={() => fixClockOut(r, who)} className="px-3 py-1.5 bg-amber-600 text-white rounded-lg text-xs font-semibold hover:bg-amber-700">Set clock-out time</button>
+                </div>
+              )
+            })}
+            {fixMsg && <p className="text-sm text-slate-700">{fixMsg}</p>}
+          </div>
+        )}
+
         {/* Managers: everyone's attendance for a day */}
         {isManager && (
           <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
@@ -752,7 +816,8 @@ export default function AttendancePage() {
                           </td>
                           <td className="px-4 py-3 text-slate-600">{fmtT(r.clock_in_time)}</td>
                           <td className="px-4 py-3 text-slate-600">
-                            {r.clock_out_time ? fmtT(r.clock_out_time) : <span className="text-amber-500 text-xs">Working…</span>}
+                            {r.clock_out_time ? fmtT(r.clock_out_time) : isCurrentSession(r, today) ? <span className="text-amber-500 text-xs">Working…</span> : (
+                              <span className="text-xs text-red-600">Forgot to clock out{isCeo && <button onClick={() => fixClockOut(r, p.full_name)} className="block mt-0.5 text-green-700 underline">Set time</button>}</span>)}
                             {r.is_location_mismatch && <span className="block text-xs text-red-500">⚠ clocked out {r.clock_out_distance_m != null ? `${r.clock_out_distance_m} m away` : 'away from the office'}</span>}
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-800">{r.total_hours != null ? `${Number(r.total_hours).toFixed(1)}h` : '—'}</td>

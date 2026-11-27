@@ -19,7 +19,21 @@ interface Employee {
   allocation_level?: 'senior' | 'junior' | null
 }
 type Tab = 'pending' | 'employees'
-const ROLE_LABEL: Record<string, string> = { employee: 'Staff (sales / field)', task_manager: 'Admin manager', admin: 'CEO (admin)' }
+const ROLE_LABEL: Record<string, string> = {
+  employee: 'Staff (sales / field)', jr_admin: 'Jr Admin Manager', sr_admin: 'Sr Admin Manager',
+  task_manager: 'Admin manager (full access)', admin: 'CEO (admin)',
+}
+// What each role means, shown before the change is confirmed
+const ROLE_MEANS: Record<string, string> = {
+  employee: 'Works on the tasks, quotations and jobs given to them.',
+  jr_admin: 'Allocates work (tasks, quotation people, service jobs) to anyone except a Sr Admin Manager. Sees all quotations but not supplier cost or margin; changes to a quotation go to you for approval.',
+  sr_admin: 'Allocates work to anyone, and gives the first-level approval of leave (you give the final approval). Sees all quotations but not supplier cost or margin; changes to a quotation go to you for approval.',
+  task_manager: 'Full access: sees supplier cost and margin, edits every quotation directly, allocates work to anyone and gives first-level leave approval.',
+  admin: 'A CEO (admin) can see everything, approve quotations, change prices and manage all users.',
+}
+// The role as picked in the dropdown (Sr / Jr are staff with an allocation level)
+const roleKey = (e: { role: string; allocation_level?: string | null }) =>
+  e.role === 'employee' && e.allocation_level === 'senior' ? 'sr_admin' : e.role === 'employee' && e.allocation_level === 'junior' ? 'jr_admin' : e.role
 
 export default function UserManagementPage() {
   const supabase = createClient()
@@ -113,16 +127,6 @@ export default function UserManagementPage() {
     } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
   }
 
-  // Sr / Jr Admin Manager: who this person may allocate work to (tasks, quotation people, service jobs)
-  const handleAllocationLevel = async (emp: Employee, level: string) => {
-    const lv = level === 'senior' || level === 'junior' ? level : null
-    try {
-      await manage({ user_id: emp.id, action: 'allocation_level', value: lv })
-      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, allocation_level: lv, designation: lv ? (lv === 'senior' ? 'Sr Admin Manager' : 'Jr Admin Manager') : e.designation } : e))
-      showToast(lv ? `✅ ${emp.full_name} is now ${lv === 'senior' ? 'Sr Admin Manager — can allocate work to anyone' : 'Jr Admin Manager — can allocate work to anyone except a Sr Admin Manager'}` : `${emp.full_name} no longer allocates work`)
-    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
-  }
-
   // "Quotations: view all" — see every quotation and log enquiries; changes need the CEO's approval
   const handleQuotationView = async (emp: Employee, on: boolean) => {
     try {
@@ -133,15 +137,20 @@ export default function UserManagementPage() {
   }
 
   const handleRoleChange = async (emp: Employee, role: string) => {
-    if (role === emp.role) return
-    const extra = role === 'admin' ? '\n\nA CEO (admin) can see everything, approve quotations, change prices and manage all users.' : ''
-    if (!window.confirm(`Change the role of ${emp.full_name} from "${ROLE_LABEL[emp.role] ?? emp.role}" to "${ROLE_LABEL[role]}"?${extra}`)) {
+    const cur = roleKey(emp)
+    if (role === cur) return
+    if (!window.confirm(`Change the role of ${emp.full_name} from "${ROLE_LABEL[cur] ?? cur}" to "${ROLE_LABEL[role]}"?\n\n${ROLE_MEANS[role] ?? ''}`)) {
       setEmployees(prev => [...prev]) // put the dropdown back
       return
     }
     try {
       await manage({ user_id: emp.id, action: 'role', role })
-      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, role } : e))
+      const lv = role === 'sr_admin' ? 'senior' as const : role === 'jr_admin' ? 'junior' as const : null
+      const title = lv === 'senior' ? 'Sr Admin Manager' : lv === 'junior' ? 'Jr Admin Manager' : null
+      setEmployees(prev => prev.map(e => e.id === emp.id ? {
+        ...e, role: lv ? 'employee' : role, allocation_level: lv,
+        designation: title ?? (['Sr Admin Manager', 'Jr Admin Manager'].includes(e.designation ?? '') ? (role === 'task_manager' ? 'Admin Manager' : null) : e.designation),
+      } : e))
       showToast(`✅ ${emp.full_name} is now ${ROLE_LABEL[role]}`)
     } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
   }
@@ -378,27 +387,22 @@ ${a.link}`
                       <td className="px-4 py-4 text-slate-600 whitespace-nowrap">{emp.designation ?? '—'}</td>
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1">
-                          <Shield size={12} className={emp.role === 'admin' ? 'text-purple-500' : emp.role === 'task_manager' ? 'text-blue-500' : 'text-slate-400'} />
-                          <select value={emp.role} onChange={e => handleRoleChange(emp, e.target.value)} disabled={emp.id === meId}
+                          <Shield size={12} className={emp.role === 'admin' ? 'text-purple-500' : emp.role === 'task_manager' ? 'text-blue-500' : emp.allocation_level ? 'text-green-600' : 'text-slate-400'} />
+                          <select value={roleKey(emp)} onChange={e => handleRoleChange(emp, e.target.value)} disabled={emp.id === meId} title={ROLE_MEANS[roleKey(emp)]}
                             aria-label={`Role of ${emp.full_name}`}
                             className="text-xs bg-transparent text-slate-700 border border-slate-200 rounded px-1 py-0.5 focus:outline-none cursor-pointer disabled:cursor-default disabled:border-transparent">
                             <option value="employee">Staff (sales / field)</option>
-                            <option value="task_manager">Admin manager</option>
+                            <option value="jr_admin">Jr Admin Manager</option>
+                            <option value="sr_admin">Sr Admin Manager</option>
+                            <option value="task_manager">Admin manager (full access)</option>
                             <option value="admin">CEO (admin)</option>
                           </select>
                         </div>
                       </td>
                       <td className="px-4 py-4">
-                        {emp.role === 'admin' ? <span className="text-xs text-slate-500">Anyone (CEO)</span>
-                          : emp.role === 'task_manager' ? <span className="text-xs text-slate-500">Anyone (admin manager)</span> : (
-                          <select value={emp.allocation_level ?? ''} onChange={e => handleAllocationLevel(emp, e.target.value)} aria-label={`Allocates work: ${emp.full_name}`}
-                            title="Sr Admin Manager: allocates work to anyone. Jr Admin Manager: to anyone except a Sr Admin Manager."
-                            className="text-xs bg-transparent text-slate-700 border border-slate-200 rounded px-1 py-0.5 cursor-pointer">
-                            <option value="">No</option>
-                            <option value="senior">Sr Admin Manager</option>
-                            <option value="junior">Jr Admin Manager</option>
-                          </select>
-                        )}
+                        <span className="text-xs text-slate-600">{
+                          emp.role === 'admin' || emp.role === 'task_manager' || emp.allocation_level === 'senior' ? 'Anyone'
+                          : emp.allocation_level === 'junior' ? 'Anyone except Sr Admin Manager' : '—'}</span>
                       </td>
                       <td className="px-4 py-4">
                         {emp.role === 'admin' ? <span className="text-xs text-slate-500">Full (CEO)</span> : (

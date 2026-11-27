@@ -7,6 +7,11 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 // attendance etc. carry their name, the login is blocked for good and the records are kept.
 
 const ROLES = ['employee', 'task_manager', 'admin'] as const
+// Picked in the Role column; stored as role 'employee' + allocation_level (allocation_levels_v1.sql)
+const LEVEL_ROLES: Record<string, { level: 'senior' | 'junior'; title: string }> = {
+  sr_admin: { level: 'senior', title: 'Sr Admin Manager' },
+  jr_admin: { level: 'junior', title: 'Jr Admin Manager' },
+}
 const BLOCK = '876000h' // ~100 years
 type Admin = ReturnType<typeof createAdminClient>
 
@@ -27,7 +32,7 @@ export async function POST(req: NextRequest) {
   if (user_id === user.id) return NextResponse.json({ error: 'You cannot change or delete your own CEO account here.' }, { status: 400 })
 
   const admin = createAdminClient()
-  const { data: target } = await admin.from('profiles').select('id,email,full_name,role,status').eq('id', user_id).single()
+  const { data: target } = await admin.from('profiles').select('*').eq('id', user_id).single()
   if (!target) return NextResponse.json({ error: 'Staff member not found.' }, { status: 404 })
 
   const audit = (action_type: string, description: string, metadata?: Record<string, unknown>) =>
@@ -35,11 +40,18 @@ export async function POST(req: NextRequest) {
 
   try {
     if (action === 'role') {
-      if (!ROLES.includes(role)) return NextResponse.json({ error: 'Unknown role.' }, { status: 400 })
-      const { error } = await admin.from('profiles').update({ role }).eq('id', user_id)
-      if (error) throw new Error(error.message)
-      await audit('staff_role_changed', `Role of ${target.full_name} changed from ${target.role} to ${role}.`)
-      return NextResponse.json({ ok: true, role })
+      const lvl = LEVEL_ROLES[role as string]
+      if (!lvl && !ROLES.includes(role)) return NextResponse.json({ error: 'Unknown role.' }, { status: 400 })
+      const before = target.role === 'employee' && target.allocation_level ? (target.allocation_level === 'senior' ? 'Sr Admin Manager' : 'Jr Admin Manager') : target.role
+      // A Sr / Jr title only belongs with that role: clear it when the role changes to something else
+      const oldTitle = ['Sr Admin Manager', 'Jr Admin Manager'].includes(target.designation ?? '')
+      const updates = lvl
+        ? { role: 'employee', allocation_level: lvl.level, designation: lvl.title }
+        : { role, ...('allocation_level' in target ? { allocation_level: null } : {}), ...(oldTitle ? { designation: role === 'task_manager' ? 'Admin Manager' : null } : {}) }
+      const { error } = await admin.from('profiles').update(updates).eq('id', user_id)
+      if (error) throw new Error(/allocation_level/.test(error.message) ? 'The database needs the allocation update first (supabase/allocation_levels_v1.sql).' : error.message)
+      await audit('staff_role_changed', `Role of ${target.full_name} changed from ${before} to ${lvl ? lvl.title : role}.`)
+      return NextResponse.json({ ok: true, role: updates.role, allocation_level: lvl?.level ?? null })
     }
 
     if (action === 'quotation_access') {

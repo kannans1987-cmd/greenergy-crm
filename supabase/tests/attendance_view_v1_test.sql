@@ -62,6 +62,19 @@ select pg_temp.ok((select count(*) = 1 from attendance where employee_id = '0000
 
 select pg_temp.ok((select coalesce(attendance_mode, 'office') = 'office' from profiles where id = '00000000-0000-0000-0000-0000000a7e04'), 'Sr cannot change attendance type');
 
+-- Team leave lookup: managers and Sr / Jr see who is on leave (no reason), staff see nothing
+set session_replication_role = replica;
+insert into leaves (employee_id, type, from_date, to_date, reason, status) values
+ ('00000000-0000-0000-0000-0000000a7e05', 'sick', current_date, current_date + 1, 'private reason', 'approved');
+set session_replication_role = origin;
+begin; set local role authenticated; select pg_temp.act('00000000-0000-0000-0000-0000000a7e03');
+select pg_temp.ok((select count(*) = 1 from team_leave_on(current_date) where employee_id = '00000000-0000-0000-0000-0000000a7e05' and type = 'sick'), 'Jr sees who is on leave');
+select pg_temp.ok((select count(*) = 0 from leaves where employee_id = '00000000-0000-0000-0000-0000000a7e05'), 'Jr still cannot read the leave itself (reason)');
+commit;
+begin; set local role authenticated; select pg_temp.act('00000000-0000-0000-0000-0000000a7e04');
+select pg_temp.ok((select count(*) = 0 from team_leave_on(current_date)), 'staff see no one else on leave');
+commit;
+
 -- Back to staff: the level goes, so does the view
 update profiles set allocation_level = null where email = 'av-jr@gss.test';
 begin; set local role authenticated; select pg_temp.act('00000000-0000-0000-0000-0000000a7e03');

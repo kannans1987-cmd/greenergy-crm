@@ -5413,3 +5413,17 @@ grant execute on function can_view_team_attendance() to authenticated;
 -- Read only: a SELECT policy, added next to "View own attendance" (own rows or managers)
 drop policy if exists "Allocators view attendance" on attendance;
 create policy "Allocators view attendance" on attendance for select using (my_allocation_level() is not null);
+
+-- Who is on leave on a day, for the Team attendance table (so leave is not shown as "not clocked in").
+-- Only the person, the leave type and its status: never the reason or the medical certificate.
+create or replace function team_leave_on(p_date date)
+returns table (employee_id uuid, type text, status text)
+language sql stable security definer set search_path = public as $fn$
+  select l.employee_id, l.type, l.status
+    from leaves l
+   where can_view_team_attendance()
+     and p_date between l.from_date and l.to_date
+     and l.status in ('pending', 'sr_approved', 'approved');
+$fn$;
+revoke all on function team_leave_on(date) from public, anon;
+grant execute on function team_leave_on(date) to authenticated;

@@ -41,7 +41,7 @@ export default function Rules() {
   const SaveBtn = ({ k }: { k: string }) => <div className="flex justify-end"><button onClick={() => save(k)} className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg flex items-center gap-1"><Save size={14} /> Save</button></div>
 
   if (loading) return <div className="flex items-center justify-center h-screen"><Loader2 className="animate-spin text-green-600" /></div>
-  const a = s.auto_approval ?? {}, r = s.referral ?? {}, g = s.group_buy ?? {}, al = s.alerts ?? {}, c = s.company ?? {}
+  const a = s.auto_approval ?? {}, r = s.referral ?? {}, g = s.group_buy ?? {}, al = s.alerts ?? {}, c = s.company ?? {}, kb = s.kanban ?? {}
   const tiers: { homes: number; discount_pct: number }[] = g.tiers ?? []
 
   return (
@@ -95,6 +95,16 @@ export default function Rules() {
           </div>
           <p className="text-[11px] text-slate-400">A lead that arrives at night is alerted once the working day starts.</p>
           <SaveBtn k="alerts" />
+        </div>
+
+        <div className={CARD}>
+          <h2 className="font-semibold text-slate-900">Task board (Kanban)</h2>
+          <p className="text-xs text-slate-500">A WIP limit stops people starting more than they can finish: a new task can go to “Doing” only when there is room. You and the admin manager can go over it for urgent work.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <F label="Tasks in “Doing” per person (0 = no limit)"><input className={INPUT} type="number" min="0" max="20" value={kb.wip_per_person ?? 3} onChange={e => set('kanban', 'wip_per_person', Math.max(0, Math.round(Number(e.target.value))))} /></F>
+            <F label="Mark a card amber after this many days in one column"><input className={INPUT} type="number" min="1" max="30" value={kb.aging_days ?? 3} onChange={e => set('kanban', 'aging_days', Math.max(1, Math.round(Number(e.target.value))))} /></F>
+          </div>
+          <SaveBtn k="kanban" />
         </div>
 
         <div className={CARD}>

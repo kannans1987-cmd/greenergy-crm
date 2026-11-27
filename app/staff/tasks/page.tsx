@@ -6,6 +6,8 @@ import Header from '@/components/staff/Header'
 import { format } from 'date-fns'
 import { Plus, CheckCircle, Clock, AlertCircle, ChevronDown, Trash2 } from 'lucide-react'
 import { canAllocate, allocatable, personTitle, LEVEL_TITLE, ALLOCATION_RULE, type AllocationLevel } from '@/lib/allocation'
+import TaskBoard from '@/components/staff/TaskBoard'
+import { LayoutGrid, List } from 'lucide-react'
 import { ROLE_LABELS } from '@/lib/workflow'
 
 interface Task {
@@ -23,6 +25,11 @@ interface Task {
   assigner: { full_name: string } | null
   assigned_to?: string | null
   assigned_by?: string | null
+  created_at?: string | null
+  started_at?: string | null
+  status_changed_at?: string | null
+  blocked?: boolean | null
+  blocked_reason?: string | null
 }
 
 interface Profile {
@@ -181,6 +188,14 @@ export default function TasksPage() {
   const [showCreate,setShowCreate]= useState(false)
   const [activeTab, setActiveTab] = useState<'pending'|'in_progress'|'completed'|'all'>('pending')
   const [whose,     setWhose]     = useState<'all' | 'mine' | 'given'>('all')
+  // Kanban board or list (remembered on this device; ?view=board from notifications)
+  const [view, setView] = useState<'list' | 'board'>('list')
+  const [kanban, setKanban] = useState<{ wip: number; aging: number }>({ wip: 3, aging: 3 })
+  useEffect(() => {
+    const v = new URLSearchParams(window.location.search).get('view') ?? localStorage.getItem('gss-task-view')
+    if (v === 'board' || v === 'list') setView(v)
+  }, [])
+  const switchView = (v: 'list' | 'board') => { setView(v); try { localStorage.setItem('gss-task-view', v) } catch { /* private mode */ } }
 
   // Create task form
   const [newTask, setNewTask] = useState({
@@ -193,7 +208,8 @@ export default function TasksPage() {
 
   const loadTasks = useCallback(async (uid: string, role: string) => {
     let q = supabase.from('tasks').select(
-      'id,title,description,priority,status,due_date,due_time,completion_notes,completed_at,assigned_to,assigned_by,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)'
+      // '*' so the Kanban fields (kanban_v1.sql) come along once they exist
+      '*,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)'
     ).order('created_at', { ascending: false })
 
     if (role === 'employee') q = q.or(`assigned_to.eq.${uid},assigned_by.eq.${uid}`)
@@ -214,6 +230,8 @@ export default function TasksPage() {
 
       const role = (prof as Profile)?.role ?? 'employee'
       const level = (prof as Profile)?.allocation_level ?? null
+      const { data: kb } = await supabase.from('business_settings').select('data').eq('key', 'kanban').maybeSingle()
+      if (kb?.data) setKanban({ wip: Number(kb.data.wip_per_person ?? 3), aging: Number(kb.data.aging_days ?? 3) })
       // Sr / Jr Admin Managers see every task, like managers
       await loadTasks(user.id, canAllocate(role, level) ? 'manager' : role)
 
@@ -237,6 +255,27 @@ export default function TasksPage() {
     const { data, error } = await supabase.from('tasks').update(updates).eq('id', id).select('id')
     if (error || !data?.length) { setNotice(error?.message ?? 'Only the person doing the task, the person who gave it, or a manager can change it.'); return }
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status, completion_notes: notes ?? t.completion_notes } : t))
+  }
+
+  // Board: move a card (the database checks the WIP limit and who may move it)
+  const moveCard = async (t: Task, status: string) => {
+    const updates: Record<string, unknown> = { status, updated_at: new Date().toISOString() }
+    if (status === 'completed') updates.completed_at = new Date().toISOString()
+    const { data, error } = await supabase.from('tasks').update(updates).eq('id', t.id).select('*,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)')
+    if (error || !data?.length) { setNotice(error?.message ?? 'Only the person doing the task, the person who gave it, or a manager can move it.'); return false }
+    setTasks(prev => prev.map(x => x.id === t.id ? data[0] as unknown as Task : x))
+    return true
+  }
+  const blockCard = async (t: Task, blocked: boolean, reason?: string) => {
+    const { data, error } = await supabase.from('tasks').update({ blocked, blocked_reason: blocked ? reason : null }).eq('id', t.id)
+      .select('*,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)')
+    if (error || !data?.length) {
+      setNotice(/blocked/.test(error?.message ?? '') && /column|schema/.test(error?.message ?? '') ? 'Flagging blocked needs the latest database update (kanban_v1.sql). Ask the CEO to run it.'
+        : error?.message ?? 'Could not change it.'); return false
+    }
+    setTasks(prev => prev.map(x => x.id === t.id ? data[0] as unknown as Task : x))
+    setNotice(blocked ? 'Flagged blocked — the person who gave it has been told' : 'Unblocked')
+    return true
   }
 
   // CEO only (the database refuses anyone else); a copy is kept in the audit log
@@ -309,11 +348,15 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
     <div className="flex flex-col min-h-screen bg-slate-50">
       <Header title="Tasks" subtitle={isManager ? (profile?.role === 'employee' && profile?.allocation_level ? `${LEVEL_TITLE[profile.allocation_level]} · ${ALLOCATION_RULE[profile.allocation_level]}` : 'Assign and manage team tasks') : 'Your assigned tasks'} />
 
-      <div className="flex-1 p-4 sm:p-6 max-w-4xl mx-auto w-full space-y-5">
+      <div className={`flex-1 p-4 sm:p-6 mx-auto w-full space-y-5 ${view === 'board' ? 'max-w-7xl' : 'max-w-4xl'}`}>
 
         {/* Tabs + Create button */}
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex gap-1 bg-white rounded-xl p-1 border border-slate-100 shadow-sm">
+          <div className="flex gap-1 bg-white rounded-xl p-1 border border-slate-100 shadow-sm" role="group" aria-label="View">
+            <button onClick={() => switchView('list')} aria-pressed={view === 'list'} className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${view === 'list' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}><List size={13} /> List</button>
+            <button onClick={() => switchView('board')} aria-pressed={view === 'board'} className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 ${view === 'board' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}><LayoutGrid size={13} /> Board</button>
+          </div>
+          {view === 'list' && <div className="flex gap-1 bg-white rounded-xl p-1 border border-slate-100 shadow-sm">
             {(['pending', 'in_progress', 'completed', 'all'] as const).map(tab => (
               <button
                 key={tab}
@@ -325,7 +368,7 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
                 {tab.replace('_', ' ')} <span className="ml-1 opacity-60">({counts[tab]})</span>
               </button>
             ))}
-          </div>
+          </div>}
 
           {isManager && (
             <select value={whose} onChange={e => setWhose(e.target.value as 'all' | 'mine' | 'given')} aria-label="Whose tasks"
@@ -402,8 +445,14 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
 
         {notice && <p role="status" className="text-sm bg-slate-800 text-white rounded-lg px-4 py-2">{notice}</p>}
 
+        {view === 'board' && (
+          <TaskBoard tasks={tasks.filter(t => whose === 'mine' ? t.assigned_to === profile?.id : whose === 'given' ? t.assigned_by === profile?.id : true)}
+            meId={profile?.id} fullManager={fullManager} wip={kanban.wip} agingDays={kanban.aging}
+            onMove={(t, s) => moveCard(t as Task, s)} onBlock={(t, b, r) => blockCard(t as Task, b, r)} />
+        )}
+
         {/* Task list */}
-        <div className="space-y-3">
+        <div className={`space-y-3 ${view === 'board' ? 'hidden' : ''}`}>
           {filteredTasks.length === 0 ? (
             <div className="bg-white rounded-xl border border-slate-100 p-10 text-center">
               <p className="text-slate-400 text-sm">No {activeTab.replace('_', ' ')} tasks found.</p>

@@ -20,6 +20,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `allocation_levels_v1_test.sql` checks Sr / Jr Admin Managers: only the CEO sets the level; a Jr allocates tasks, quotation people and service jobs to anyone except a Sr, a Sr to anyone; neither can change the quotation itself, see costing or close jobs; staff only update their own task progress; it ends with `ALL ALLOCATION LEVEL CHECKS PASSED`.
 
+`kanban_v1_test.sql` checks the task board: start / column / done times stamped, the WIP limit per person (and that the CEO can go over it, 0 = off), blocked needs a reason and tells the giver, Review tells the giver, people move only their own cards; it ends with `ALL KANBAN CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import Header from '@/components/staff/Header'
 import Link from 'next/link'
-import { Plus, Phone } from 'lucide-react'
+import { Plus, Phone, LayoutGrid } from 'lucide-react'
 import HotColdPicker from '@/components/staff/HotColdPicker'
 import { STATUS_LABELS, STATUS_COLORS, WITH_CUSTOMER, followUpState, inr, todayIso, EDITABLE, PRE_VISIT, isOpen } from '@/lib/workflow'
 
@@ -102,6 +102,9 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
             <input name="q" defaultValue={searchParams.q ?? ''} placeholder="Search name, mobile, number, town…" aria-label="Search quotations"
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
           </form>
+          <Link href="/staff/quotations/board" className="flex items-center gap-1.5 px-4 py-2 bg-white border border-slate-200 text-slate-700 text-sm font-semibold rounded-lg hover:bg-slate-50">
+            <LayoutGrid size={15} /> Pipeline board
+          </Link>
           {(isMgr || delegate || viewer || allocator) && (
             <Link href="/staff/quotations/enquiry" className="flex items-center gap-1.5 px-4 py-2 bg-white border border-green-600 text-green-700 text-sm font-semibold rounded-lg hover:bg-green-50">
               <Phone size={15} /> Log phone enquiry

@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format, differenceInMinutes } from 'date-fns'
 import { getBestFix, type Fix } from '@/lib/geo'
+import Avatar from '@/components/staff/Avatar'
 import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2, Smartphone, Wrench, Car } from 'lucide-react'
 
 // Office staff clock in at the office (GPS must be inside the office radius — the database checks it).
@@ -44,7 +45,7 @@ const PURPOSES: [Purpose, string][] = [
 const purposeLabel = (p?: string | null) => PURPOSES.find(([k]) => k === p)?.[1] ?? 'Out on work'
 interface Lead { id: string; quotation_number: string | null; customer_name: string; city: string | null }
 interface Ticket { id: string; ticket_number: string; customer_name: string; site_address: string | null; kind: string }
-interface Staff { id: string; full_name: string; designation: string | null; role: string; attendance_mode?: 'office' | 'field' | null }
+interface Staff { id: string; full_name: string; designation: string | null; role: string; attendance_mode?: 'office' | 'field' | null; avatar_url?: string | null }
 type Mode = 'office' | 'field'
 
 const SELECT = '*,projects(name),office_locations(name)'
@@ -838,8 +839,13 @@ export default function AttendancePage() {
                     const pMode: Mode = p.attendance_mode === 'field' ? 'field' : 'office'
                     const nameCell = (
                       <td className="px-4 py-3 align-top" rowSpan={Math.max(rs.length, 1) + (rs.length > 1 ? 1 : 0)}>
-                        <p className="font-medium text-slate-800">{p.full_name}</p>
-                        {p.designation && <p className="text-xs text-slate-400">{p.designation}</p>}
+                        <div className="flex items-center gap-2.5">
+                          <Avatar name={p.full_name} url={p.avatar_url} size={36} />
+                          <div>
+                            <p className="font-medium text-slate-800">{p.full_name}</p>
+                            {p.designation && <p className="text-xs text-slate-400">{p.designation}</p>}
+                          </div>
+                        </div>
                         {isCeo ? (
                           <select value={pMode} onChange={e => changeMode(p, e.target.value as Mode)} aria-label={`Attendance type of ${p.full_name}`}
                             className="mt-1 text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white text-slate-600">

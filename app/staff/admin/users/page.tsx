@@ -3,6 +3,8 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
+import Avatar from '@/components/staff/Avatar'
+import { setStaffPhoto, removeStaffPhoto, announceMyPhoto } from '@/lib/staff-photo'
 import { UserCheck, UserX, Shield, Users, Clock, KeyRound, Trash2 } from 'lucide-react'
 
 interface Registration {
@@ -17,6 +19,7 @@ interface Employee {
   quotation_access?: boolean
   quotation_view?: boolean
   allocation_level?: 'senior' | 'junior' | null
+  avatar_url?: string | null
 }
 type Tab = 'pending' | 'employees'
 const ROLE_LABEL: Record<string, string> = {
@@ -53,6 +56,30 @@ export default function UserManagementPage() {
   const [deleting,  setDeleting] = useState(false)
 
   const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(''), 4000) }
+  // CEO: set or remove anyone's photo
+  const [photoBusy, setPhotoBusy] = useState<string | null>(null)
+  const handlePhoto = async (emp: Employee, file?: File | null) => {
+    if (!file) return
+    setPhotoBusy(emp.id)
+    try {
+      const url = await setStaffPhoto(supabase, emp.id, file)
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, avatar_url: url } : e))
+      if (emp.id === meId) announceMyPhoto(url)
+      showToast(`✅ Photo saved for ${emp.full_name}`)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Could not save the photo'}`) }
+    finally { setPhotoBusy(null) }
+  }
+  const handleRemovePhoto = async (emp: Employee) => {
+    if (!window.confirm(`Remove the photo of ${emp.full_name}?`)) return
+    setPhotoBusy(emp.id)
+    try {
+      await removeStaffPhoto(supabase, emp.id)
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, avatar_url: null } : e))
+      if (emp.id === meId) announceMyPhoto(null)
+      showToast(`Photo removed for ${emp.full_name}`)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
+    finally { setPhotoBusy(null) }
+  }
 
   // Role, status and delete go through the server (CEO only), which also blocks or unblocks the login
   const manage = async (body: Record<string, unknown>) => {
@@ -377,10 +404,16 @@ ${a.link}`
                     <tr key={emp.id} className="hover:bg-slate-50 transition">
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-green-700 rounded-full flex items-center justify-center text-white text-sm font-bold shrink-0">
-                            {emp.full_name[0]?.toUpperCase()}
+                          <label className="relative cursor-pointer shrink-0" title={emp.avatar_url ? `Change the photo of ${emp.full_name}` : `Add a photo of ${emp.full_name}`}>
+                            <Avatar name={emp.full_name} url={emp.avatar_url} size={40} className={photoBusy === emp.id ? 'opacity-40' : ''} />
+                            {!emp.avatar_url && <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-white border border-slate-200 text-[10px] leading-none flex items-center justify-center text-slate-600">+</span>}
+                            <input type="file" accept="image/*" className="sr-only" disabled={photoBusy === emp.id}
+                              onChange={e => { handlePhoto(emp, e.target.files?.[0]); e.target.value = '' }} aria-label={`Photo of ${emp.full_name}`} />
+                          </label>
+                          <div>
+                            <p className="font-semibold text-slate-900 whitespace-nowrap">{emp.full_name}</p>
+                            {emp.avatar_url && <button onClick={() => handleRemovePhoto(emp)} className="text-[11px] text-slate-400 hover:text-red-600">Remove photo</button>}
                           </div>
-                          <p className="font-semibold text-slate-900 whitespace-nowrap">{emp.full_name}</p>
                         </div>
                       </td>
                       <td className="px-4 py-4 text-slate-600">{emp.email}</td>

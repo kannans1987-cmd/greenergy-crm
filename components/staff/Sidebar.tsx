@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
+import Avatar from '@/components/staff/Avatar'
+import { PHOTO_EVENT } from '@/lib/staff-photo'
 
 type Role = 'admin' | 'task_manager' | 'employee'
 
@@ -54,14 +56,19 @@ export default function Sidebar() {
 
   const [collapsed,  setCollapsed]  = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [profile,    setProfile]    = useState<{ full_name: string; role: Role; designation?: string; price_access?: string | null } | null>(null)
+  const [profile,    setProfile]    = useState<{ full_name: string; role: Role; designation?: string; price_access?: string | null; avatar_url?: string | null } | null>(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return
-      supabase.from('profiles').select('full_name,role,designation,price_access').eq('id', user.id).single()
-        .then(({ data }) => { if (data) setProfile(data as { full_name: string; role: Role; designation?: string; price_access?: string | null }) })
+      supabase.from('profiles').select('full_name,role,designation,price_access,avatar_url').eq('id', user.id).single()
+        .then(({ data }) => { if (data) setProfile(data as { full_name: string; role: Role; designation?: string; price_access?: string | null; avatar_url?: string | null }) })
     })
+  }, [])
+  useEffect(() => {
+    const on = (e: Event) => setProfile(p => p ? { ...p, avatar_url: (e as CustomEvent<string | null>).detail } : p)
+    window.addEventListener(PHOTO_EVENT, on)
+    return () => window.removeEventListener(PHOTO_EVENT, on)
   }, [])
 
   const handleSignOut = async () => {
@@ -129,15 +136,13 @@ export default function Sidebar() {
       {/* User info + sign out */}
       <div className="border-t border-slate-700/50 p-3">
         {!collapsed && profile && (
-          <div className="flex items-center gap-3 mb-3 px-1">
-            <div className="w-8 h-8 rounded-full bg-green-700 flex items-center justify-center text-white text-sm font-bold shrink-0">
-              {profile.full_name?.[0]?.toUpperCase() ?? 'U'}
-            </div>
+          <Link href="/staff/profile" onClick={() => setMobileOpen(false)} className="flex items-center gap-3 mb-3 px-1 rounded-lg hover:bg-slate-800 py-1">
+            <Avatar name={profile.full_name} url={profile.avatar_url} size={36} />
             <div className="overflow-hidden">
               <p className="text-white text-xs font-semibold truncate">{profile.full_name}</p>
               <p className="text-slate-400 text-[10px]">{profile.role === 'admin' ? 'CEO' : profile.role === 'task_manager' ? 'Admin manager' : (profile.designation || 'Staff')}</p>
             </div>
-          </div>
+          </Link>
         )}
         <button
           onClick={handleSignOut}

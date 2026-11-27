@@ -26,6 +26,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `attendance_view_v1_test.sql` checks that a Sr / Jr Admin Manager sees everyone's clock-in and clock-out but cannot clock anyone in, change a time, delete a session or change the attendance type, sees who is on leave (type only, no reason), and loses the view when they go back to staff; it ends with `ALL ATTENDANCE VIEW CHECKS PASSED`.
 
+`staff_photos_v1_test.sql` checks staff photos: each person sets their own, the CEO sets anyone's, nobody uploads into or deletes from someone else's folder, and the photo link must be the person's own file in the staff-photos bucket; it ends with `ALL STAFF PHOTO CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

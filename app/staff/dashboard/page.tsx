@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import Link from 'next/link'
+import Avatar from '@/components/staff/Avatar'
 import { format } from 'date-fns'
 import {
   CheckSquare, MapPin, FileText, Clock,
@@ -82,7 +83,9 @@ function StatusDot({ status }: { status: string }) {
 export default function EmployeeDashboard() {
   const supabase = createClient()
   const [userId,      setUserId]      = useState<string | null>(null)
-  const [profile,     setProfile]     = useState<{ full_name: string } | null>(null)
+  const [profile,     setProfile]     = useState<{ full_name: string; designation?: string | null; avatar_url?: string | null } | null>(null)
+  // CEO, admin manager, Sr / Jr Admin Manager: everyone's face with today's status
+  const [team,        setTeam]        = useState<{ id: string; full_name: string; designation: string | null; avatar_url: string | null; state: 'in' | 'done' | 'leave' | 'out' }[]>([])
   const [tasks,       setTasks]       = useState<Task[]>([])
   const [attendance,  setAttendance]  = useState<AttendanceRecord | null>(null)
   const [todayHours,  setTodayHours]  = useState(0)
@@ -107,7 +110,7 @@ export default function EmployeeDashboard() {
         { data: cards },
         { data: attMonth },
       ] = await Promise.all([
-        supabase.from('profiles').select('full_name, role').eq('id', user.id).single(),
+        supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase.from('tasks').select('id,title,priority,status,due_date,projects(name)')
           .eq('assigned_to', user.id).neq('status', 'completed').neq('status', 'cancelled')
           .order('due_date', { ascending: true }).limit(5),
@@ -123,6 +126,21 @@ export default function EmployeeDashboard() {
         const mgr = ['admin', 'task_manager'].includes((prof as { role?: string }).role ?? '')
         setIsMgr(mgr)
         if (mgr) supabase.rpc('run_scheduled_alerts').then(() => {}, () => {})   // due alerts (no-op if sent recently)
+        const p = prof as { role?: string; allocation_level?: string | null }
+        if (mgr || (p.role === 'employee' && p.allocation_level)) {
+          const [{ data: people }, { data: att }, { data: lv }] = await Promise.all([
+            supabase.from('profiles').select('*').eq('status', 'active').neq('role', 'admin').order('full_name'),
+            supabase.from('attendance').select('employee_id, clock_out_time').eq('date', today),
+            supabase.rpc('team_leave_on', { p_date: today }),
+          ])
+          const rows = (att as { employee_id: string; clock_out_time: string | null }[] | null) ?? []
+          const onLeave = new Set(((lv as { employee_id: string }[] | null) ?? []).map(l => l.employee_id))
+          setTeam(((people as { id: string; full_name: string; designation: string | null; avatar_url: string | null }[] | null) ?? []).map(x => {
+            const mine = rows.filter(r => r.employee_id === x.id)
+            const state = mine.some(r => !r.clock_out_time) ? 'in' as const : mine.length ? 'done' as const : onLeave.has(x.id) ? 'leave' as const : 'out' as const
+            return { id: x.id, full_name: x.full_name, designation: x.designation, avatar_url: x.avatar_url, state }
+          }))
+        }
       }
       if (todayTasks)  setTasks(todayTasks as unknown as Task[])
       if (todayAtt) {
@@ -163,6 +181,48 @@ export default function EmployeeDashboard() {
       />
 
       <div className="flex-1 p-4 sm:p-6 space-y-6 max-w-6xl mx-auto w-full">
+
+        {/* Welcome, with my photo */}
+        <div className="bg-gradient-to-r from-green-700 to-green-500 rounded-2xl p-5 flex items-center gap-4 text-white shadow-sm">
+          <Link href="/staff/profile" title={profile?.avatar_url ? 'My profile' : 'Add your photo'} className="shrink-0">
+            <Avatar name={profile?.full_name} url={profile?.avatar_url} size={72} square className="border-4 border-white/80 shadow-md" />
+          </Link>
+          <div className="min-w-0">
+            <p className="text-lg font-bold truncate">{profile?.full_name}</p>
+            <p className="text-sm text-white/80 truncate">{isCeo ? 'CEO' : profile?.designation || 'Greenergy team'}</p>
+            {!profile?.avatar_url && (
+              <Link href="/staff/profile" className="inline-block mt-2 text-xs font-semibold bg-white/20 hover:bg-white/30 rounded-full px-3 py-1">📷 Add your photo</Link>
+            )}
+          </div>
+        </div>
+
+        {/* Team today (CEO, admin manager, Sr / Jr Admin Manager) */}
+        {team.length > 0 && (
+          <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold text-slate-900 text-sm">
+                Team today · {team.filter(t => t.state === 'in').length} working now
+              </h3>
+              <Link href="/staff/attendance" className="text-xs text-green-600 hover:text-green-700">Attendance →</Link>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-5 lg:grid-cols-8 gap-4">
+              {team.map(t => {
+                const dot = { in: 'bg-green-500', done: 'bg-slate-400', leave: 'bg-blue-500', out: 'bg-amber-400' }[t.state]
+                const label = { in: 'Working', done: 'Clocked out', leave: 'On leave', out: 'Not in yet' }[t.state]
+                return (
+                  <div key={t.id} className="flex flex-col items-center text-center" title={`${t.full_name} · ${label}`}>
+                    <div className="relative">
+                      <Avatar name={t.full_name} url={t.avatar_url} size={56} className={t.state === 'out' || t.state === 'leave' ? 'opacity-60' : ''} />
+                      <span className={`absolute bottom-0 right-0 w-3.5 h-3.5 rounded-full border-2 border-white ${dot}`} />
+                    </div>
+                    <p className="mt-1.5 text-xs font-medium text-slate-800 leading-tight line-clamp-2">{t.full_name}</p>
+                    <p className="text-[10px] text-slate-400">{label}</p>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Attendance status banner (staff only) */}
         {!isCeo && (

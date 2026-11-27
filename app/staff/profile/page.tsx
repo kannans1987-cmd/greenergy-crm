@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format } from 'date-fns'
-import { User, Phone, Briefcase, Calendar, Shield, CheckCircle, AlertTriangle } from 'lucide-react'
+import { User, Phone, Briefcase, Calendar, Shield, CheckCircle, AlertTriangle, Camera } from 'lucide-react'
+import Avatar from '@/components/staff/Avatar'
+import { setStaffPhoto, removeStaffPhoto, announceMyPhoto } from '@/lib/staff-photo'
 
 interface Profile {
   id: string
@@ -17,6 +19,7 @@ interface Profile {
   status: string
   date_of_joining: string | null
   created_at: string
+  avatar_url: string | null
 }
 
 export default function ProfilePage() {
@@ -43,7 +46,7 @@ export default function ProfilePage() {
       if (!user) return
       const { data } = await supabase
         .from('profiles')
-        .select('id,full_name,email,phone,designation,department,role,status,date_of_joining,created_at')
+        .select('id,full_name,email,phone,designation,department,role,status,date_of_joining,created_at,avatar_url')
         .eq('id', user.id).single()
       if (data) {
         setProfile(data as Profile)
@@ -53,6 +56,27 @@ export default function ProfilePage() {
     }
     load()
   }, [])
+
+  // Photo
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [photoMsg,  setPhotoMsg]  = useState('')
+  const onPhoto = async (file?: File | null) => {
+    if (!file || !profile) return
+    setPhotoBusy(true); setPhotoMsg('')
+    try {
+      const url = await setStaffPhoto(supabase, profile.id, file)
+      setProfile(p => p ? { ...p, avatar_url: url } : p); announceMyPhoto(url)
+      setPhotoMsg('✅ Photo saved')
+    } catch (e: unknown) { setPhotoMsg('❌ ' + (e instanceof Error ? e.message : 'Could not save the photo')) }
+    finally { setPhotoBusy(false) }
+  }
+  const onRemovePhoto = async () => {
+    if (!profile || !window.confirm('Remove your photo?')) return
+    setPhotoBusy(true); setPhotoMsg('')
+    try { await removeStaffPhoto(supabase, profile.id); setProfile(p => p ? { ...p, avatar_url: null } : p); announceMyPhoto(null); setPhotoMsg('Photo removed') }
+    catch (e: unknown) { setPhotoMsg('❌ ' + (e instanceof Error ? e.message : 'Failed')) }
+    finally { setPhotoBusy(false) }
+  }
 
   const handleSavePhone = async () => {
     if (!profile) return
@@ -121,9 +145,14 @@ export default function ProfilePage() {
           <div className="h-20 bg-gradient-to-r from-green-700 to-green-500" />
           <div className="px-5 pb-5">
             <div className="flex items-end gap-4 -mt-8 mb-4">
-              <div className="w-16 h-16 rounded-2xl bg-white border-4 border-white shadow-md flex items-center justify-center text-2xl font-bold text-green-700">
-                {profile.full_name?.[0]?.toUpperCase()}
-              </div>
+              <label className="relative cursor-pointer group shrink-0" title={profile.avatar_url ? 'Change photo' : 'Add your photo'}>
+                <Avatar name={profile.full_name} url={profile.avatar_url} size={80} square className="border-4 border-white shadow-md" />
+                <span className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-green-600 text-white flex items-center justify-center shadow group-hover:bg-green-700">
+                  {photoBusy ? <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" /> : <Camera size={14} />}
+                </span>
+                <input type="file" accept="image/*" className="sr-only" disabled={photoBusy}
+                  onChange={e => { onPhoto(e.target.files?.[0]); e.target.value = '' }} aria-label="Choose your photo" />
+              </label>
               <div className="pb-1">
                 <h2 className="text-lg font-bold text-slate-900">{profile.full_name}</h2>
                 <p className="text-sm text-slate-500">{profile.designation ?? 'Staff Member'}</p>
@@ -137,6 +166,11 @@ export default function ProfilePage() {
               </div>
             </div>
 
+            <div className="-mt-2 mb-4 text-xs text-slate-500 flex flex-wrap items-center gap-3">
+              <span>{profile.avatar_url ? 'Tap the photo to change it.' : 'Tap the camera to add your photo (a clear face photo, like an ID card).'}</span>
+              {profile.avatar_url && !photoBusy && <button onClick={onRemovePhoto} className="text-red-600 hover:underline">Remove photo</button>}
+              {photoMsg && <span className="text-slate-700">{photoMsg}</span>}
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <InfoRow icon={User}     label="Full Name"   value={profile.full_name} />
               <InfoRow icon={Shield}   label="Role"        value={roleLabel[profile.role] ?? profile.role} />

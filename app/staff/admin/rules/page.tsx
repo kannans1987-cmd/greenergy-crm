@@ -41,7 +41,7 @@ export default function Rules() {
   const SaveBtn = ({ k }: { k: string }) => <div className="flex justify-end"><button onClick={() => save(k)} className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg flex items-center gap-1"><Save size={14} /> Save</button></div>
 
   if (loading) return <div className="flex items-center justify-center h-screen"><Loader2 className="animate-spin text-green-600" /></div>
-  const a = s.auto_approval ?? {}, r = s.referral ?? {}, g = s.group_buy ?? {}, al = s.alerts ?? {}, c = s.company ?? {}, kb = s.kanban ?? {}
+  const a = s.auto_approval ?? {}, r = s.referral ?? {}, g = s.group_buy ?? {}, al = s.alerts ?? {}, c = s.company ?? {}, kb = s.kanban ?? {}, lv = s.leave ?? {}
   const tiers: { homes: number; discount_pct: number }[] = g.tiers ?? []
 
   return (
@@ -95,6 +95,25 @@ export default function Rules() {
           </div>
           <p className="text-[11px] text-slate-400">A lead that arrives at night is alerted once the working day starts.</p>
           <SaveBtn k="alerts" />
+        </div>
+
+        <div className={CARD}>
+          <h2 className="font-semibold text-slate-900">Leave policy</h2>
+          <p className="text-xs text-slate-500">Applied by the database to every leave: the Sr Admin Manager approves first, then you. Abrupt casual leave and absence without intimation are always loss of pay; sick leave is paid only with a medical certificate.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <F label="Casual leave: days of notice needed"><input className={INPUT} type="number" min="0" max="30" value={lv.notice_days ?? 5} onChange={e => set('leave', 'notice_days', Math.max(0, Math.round(Number(e.target.value))))} /></F>
+            <F label="Casual leave: paid days"><input className={INPUT} type="number" min="0" max="10" value={lv.casual_paid_days ?? 1} onChange={e => set('leave', 'casual_paid_days', Math.max(0, Math.round(Number(e.target.value))))} /></F>
+            <F label="…paid days if the reason is genuine"><input className={INPUT} type="number" min="0" max="10" value={lv.casual_paid_days_genuine ?? 2} onChange={e => set('leave', 'casual_paid_days_genuine', Math.max(0, Math.round(Number(e.target.value))))} /></F>
+            <F label="Termination review after (days away)"><input className={INPUT} type="number" min="3" max="60" value={lv.termination_days ?? 10} onChange={e => set('leave', 'termination_days', Math.max(3, Math.round(Number(e.target.value))))} /></F>
+            <F label="Sick leave can be applied up to (days after)"><input className={INPUT} type="number" min="0" max="30" value={lv.sick_backdate_days ?? 7} onChange={e => set('leave', 'sick_backdate_days', Math.max(0, Math.round(Number(e.target.value))))} /></F>
+            <div><span className="text-xs font-medium text-slate-600 mb-1 block">Weekly off (not counted as leave)</span>
+              <div className="flex flex-wrap gap-2 text-xs">{['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => {
+                const off: number[] = Array.isArray(lv.week_off) ? lv.week_off : [0]
+                return <label key={d} className="flex items-center gap-1"><input type="checkbox" checked={off.includes(i)} className="accent-green-600"
+                  onChange={e => set('leave', 'week_off', e.target.checked ? [...off, i].sort() : off.filter(x => x !== i))} />{d}</label>
+              })}</div></div>
+          </div>
+          <SaveBtn k="leave" />
         </div>
 
         <div className={CARD}>

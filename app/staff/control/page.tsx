@@ -61,7 +61,7 @@ export default function ControlRoom() {
       safe(supabase.from('service_tickets').select('id, ticket_number, customer_name, kind, status, assigned_to, due_date, scheduled_for, created_at').in('status', ['open', 'assigned', 'in_progress']).order('due_date').limit(300)),
       safe(supabase.from('service_contracts').select('id, contract_number, customer_name, end_date, renewed_to, status, project_id').order('end_date').limit(500)),
       safe(supabase.from('attendance').select('id, employee_id, clock_in_time, date, profiles!attendance_employee_id_fkey(full_name)').is('clock_out_time', null).lt('clock_in_time', new Date(Date.now() - 12 * 3600000).toISOString()).gt('clock_in_time', new Date(Date.now() - 7 * 86400000).toISOString())),
-      safe(supabase.from('leaves').select('id, from_date, to_date, type, profiles!leaves_employee_id_fkey(full_name)').eq('status', 'pending')),
+      safe(supabase.from('leaves').select('id, from_date, to_date, type, status, profiles!leaves_employee_id_fkey(full_name)').in('status', ['pending', 'sr_approved'])),
       safe(supabase.from('referral_rewards').select('id, amount, created_at').eq('status', 'due')),
       safe(supabase.from('project_stage_history').select('project_id, actual_date, projects!inner(id, job_number, customer_name, customer_mobile, capacity_kwp)').eq('stage_code', 'commissioning').eq('status', 'completed')),
       safe(supabase.from('quotation_change_requests').select('id, quotation_id, reason, created_at, requester:profiles!quotation_change_requests_requested_by_fkey(full_name), quotation_requests(quotation_number, customer_name)').eq('status', 'pending').order('created_at')),

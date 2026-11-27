@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const dir = dirname(fileURLToPath(import.meta.url))
-const parts = ['schema.sql', 'workflow_tables.sql', 'job_card_logs.sql', 'quotation_module.sql', 'quotation_documents_bucket.sql', 'workflow_v2.sql', 'pricing_v1.sql', 'quotation_access_v1.sql', 'attendance_v1.sql', 'attendance_devices_v1.sql', 'quotation_allocation_v1.sql', 'lead_temperature_v1.sql', 'job_card_ongoing_v1.sql', 'project_delete_v1.sql', 'task_delete_v1.sql', 'attendance_multi_v1.sql', 'growth_v1.sql', 'service_v1.sql', 'attendance_outside_v1.sql', 'attendance_forgot_v1.sql', 'quotation_view_v1.sql', 'quotation_panels_v1.sql', 'allocation_levels_v1.sql', 'kanban_v1.sql']
+const parts = ['schema.sql', 'workflow_tables.sql', 'job_card_logs.sql', 'quotation_module.sql', 'quotation_documents_bucket.sql', 'workflow_v2.sql', 'pricing_v1.sql', 'quotation_access_v1.sql', 'attendance_v1.sql', 'attendance_devices_v1.sql', 'quotation_allocation_v1.sql', 'lead_temperature_v1.sql', 'job_card_ongoing_v1.sql', 'project_delete_v1.sql', 'task_delete_v1.sql', 'attendance_multi_v1.sql', 'growth_v1.sql', 'service_v1.sql', 'attendance_outside_v1.sql', 'attendance_forgot_v1.sql', 'quotation_view_v1.sql', 'quotation_panels_v1.sql', 'allocation_levels_v1.sql', 'kanban_v1.sql', 'leave_policy_v1.sql']
 const section = p => `\n\n-- ┌───────────────────────────────────────────────────────────────\n-- │ ${p}\n-- └───────────────────────────────────────────────────────────────\n\n${readFileSync(join(dir, p), 'utf8').trim()}\n`
 
 const header = `-- ═══════════════════════════════════════════════════════════════

@@ -141,6 +141,7 @@ export default function AttendancePage() {
 
   const [userId,          setUserId]          = useState<string | null>(null)
   const [role,            setRole]            = useState<string>('employee')
+  const [allocLevel,      setAllocLevel]      = useState<string | null>(null)
   const [projects,        setProjects]        = useState<Project[]>([])
   const [offices,         setOffices]         = useState<Office[]>([])
   const [workType,        setWorkType]        = useState<'office' | 'site' | 'service' | 'outside'>('office')
@@ -188,6 +189,8 @@ export default function AttendancePage() {
 
   const today     = format(new Date(), 'yyyy-MM-dd')
   const isManager = role === 'admin' || role === 'task_manager'
+  // Sr / Jr Admin Manager: see the team's attendance, read only (attendance_view_v1.sql)
+  const seesTeam  = isManager || (role === 'employee' && !!allocLevel)
   const isCeo     = role === 'admin'
   const activeOffices = offices.filter(o => o.active)
 
@@ -270,6 +273,7 @@ export default function AttendancePage() {
       supabase.from('attendance').select(SELECT).eq('employee_id', uid).order('date', { ascending: false }).order('clock_in_time', { ascending: false }).limit(20),
     ])
     if (me?.role) setRole(me.role)
+    setAllocLevel(me?.allocation_level ?? null)
     const m: Mode = me?.attendance_mode === 'field' ? 'field' : 'office'
     setMode(m)
     if (m === 'field') setWorkType(w => w === 'office' ? 'site' : w)
@@ -317,7 +321,7 @@ export default function AttendancePage() {
     })
   }, [loadData])
 
-  useEffect(() => { if (isManager) loadTeam(teamDate) }, [isManager, teamDate, loadTeam])
+  useEffect(() => { if (seesTeam) loadTeam(teamDate) }, [seesTeam, teamDate, loadTeam])
 
   const say = (msg: string, type: 'success'|'error'|'info') => { setStatus(msg); setStatusType(type) }
 
@@ -367,7 +371,7 @@ export default function AttendancePage() {
       const rec = data as AttendanceRecord
       setTodayRecs(rs => [...rs.filter(r => r.id !== rec.id), rec])
       say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${multi && (rec.session_no ?? 1) > 1 ? ` (session ${rec.session_no})` : ''}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`, 'success')
-      if (isManager) loadTeam(teamDate)
+      if (seesTeam) loadTeam(teamDate)
       setPurpose(''); setPurposeNote(''); setSelectedLead(''); setOutProject('')
     } catch (err: unknown) {
       say(err instanceof Error ? err.message : 'Clock-in failed', 'error')
@@ -405,7 +409,7 @@ export default function AttendancePage() {
         ? `Clocked out. This session: ${Number(rec.total_hours ?? 0).toFixed(1)} hrs. Clock in again at the next site.`
         : `Clocked out. Total: ${Number(rec.total_hours ?? 0).toFixed(1)} hrs worked.`, 'success')
       loadData(userId!)
-      if (isManager) loadTeam(teamDate)
+      if (seesTeam) loadTeam(teamDate)
     } catch (err: unknown) {
       say(err instanceof Error ? err.message : 'Clock-out failed', 'error')
     } finally {
@@ -765,12 +769,13 @@ export default function AttendancePage() {
           </div>
         )}
 
-        {/* Managers: everyone's attendance for a day */}
-        {isManager && (
+        {/* Managers, Sr / Jr Admin Manager: everyone's attendance for a day (only the CEO changes anything) */}
+        {seesTeam && (
           <div className="bg-white rounded-xl border border-slate-100 shadow-sm">
             <div className="px-5 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
               <h3 className="font-semibold text-slate-900 text-sm flex items-center gap-2">
                 <Users size={16} className="text-green-600" /> Team attendance · {byEmp.size} of {staff.length} clocked in
+                {!isManager && <span className="text-[11px] font-normal text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">View only</span>}
               </h3>
               <input type="date" value={teamDate} max={today} onChange={e => e.target.value && setTeamDate(e.target.value)}
                 aria-label="Day to show" className="text-sm border border-slate-200 rounded-lg px-2 py-1" />

@@ -24,6 +24,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `leave_policy_v1_test.sql` checks the leave policy: casual 1 paid (2 if genuine) with 5 days notice and LOP from the 3rd day, abrupt casual leave all LOP, sick paid only with a certificate, absences LOP with a termination review past 10 days, approval Sr Admin Manager then CEO, and who sees what; it ends with `ALL LEAVE POLICY CHECKS PASSED`.
 
+`attendance_view_v1_test.sql` checks that a Sr / Jr Admin Manager sees everyone's clock-in and clock-out but cannot clock anyone in, change a time, delete a session or change the attendance type, and loses the view when they go back to staff; it ends with `ALL ATTENDANCE VIEW CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

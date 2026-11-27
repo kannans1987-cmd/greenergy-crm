@@ -13,7 +13,8 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   if (url.searchParams.get('me')) {
     const { data: p } = await supabase.from('profiles').select('*').eq('id', user.id).single()
-    const me = p ? { id: p.id, full_name: p.full_name, role: p.role, phone: p.phone, quotation_access: p.quotation_access === true, quotation_view: p.quotation_view === true } : null
+    const me = p ? { id: p.id, full_name: p.full_name, role: p.role, phone: p.phone, quotation_access: p.quotation_access === true, quotation_view: p.quotation_view === true,
+      allocation_level: p.role === 'employee' && ['senior', 'junior'].includes(p.allocation_level) ? p.allocation_level : null } : null
     return NextResponse.json({ me })
   }
   const roleParam = url.searchParams.get('role')
@@ -31,5 +32,8 @@ export async function GET(req: NextRequest) {
 
   const { data, error } = await q
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ profiles: data ?? [] })
+  // Sr / Jr Admin Manager (allocation_levels_v1.sql); read separately so the list works before that update
+  const { data: levels } = await supabase.from('profiles').select('id, allocation_level').not('allocation_level', 'is', null)
+  const lv = new Map((levels ?? []).map((x: { id: string; allocation_level: string }) => [x.id, x.allocation_level]))
+  return NextResponse.json({ profiles: (data ?? []).map(p => ({ ...p, allocation_level: lv.get(p.id) ?? null })) })
 }

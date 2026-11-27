@@ -51,6 +51,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, quotation_access: on })
     }
 
+    if (action === 'allocation_level') {
+      const lv = value === 'senior' || value === 'junior' ? value : null
+      if (lv && target.role !== 'employee') return NextResponse.json({ error: 'The CEO and admin managers already allocate work to anyone.' }, { status: 400 })
+      const title = lv === 'senior' ? 'Sr Admin Manager' : lv === 'junior' ? 'Jr Admin Manager' : null
+      // The level, and the designation people see, together
+      const { error } = await admin.from('profiles').update({ allocation_level: lv, ...(title ? { designation: title } : {}) }).eq('id', user_id)
+      if (error) throw new Error(/allocation_level/.test(error.message)
+        ? 'The database needs the allocation update first (supabase/allocation_levels_v1.sql).' : error.message)
+      await audit('staff_allocation_level', `${target.full_name} ${title ? 'is now ' + title + (lv === 'senior' ? ' (allocates work to anyone)' : ' (allocates work to anyone except a Sr Admin Manager)') : 'no longer allocates work'}.`)
+      return NextResponse.json({ ok: true, allocation_level: lv })
+    }
+
     if (action === 'quotation_view') {
       const on = value === true
       const { error } = await admin.from('profiles').update({ quotation_view: on }).eq('id', user_id)

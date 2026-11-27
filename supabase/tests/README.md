@@ -18,6 +18,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `quotation_panels_v1_test.sql` checks mixed DCR + Non-DCR panels and the chosen inverter phase: valid values only, saved by the preparer, locked after approval, and counted correctly by auto-approval; it ends with `ALL MIXED PANEL CHECKS PASSED`.
 
+`allocation_levels_v1_test.sql` checks Sr / Jr Admin Managers: only the CEO sets the level; a Jr allocates tasks, quotation people and service jobs to anyone except a Sr, a Sr to anyone; neither can change the quotation itself, see costing or close jobs; staff only update their own task progress; it ends with `ALL ALLOCATION LEVEL CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

@@ -21,6 +21,7 @@ import PriceInput from '@/components/staff/PriceInput'
 import PanelInverterPicker, { type PickerValue } from '@/components/staff/PanelInverterPicker'
 import type { PriceMode } from '@/lib/workflow'
 import { LOST_REASONS, lostLabel, hoursAgo, groupLink } from '@/lib/growth'
+import { canAllocate, allocatable, personTitle, type AllocationLevel } from '@/lib/allocation'
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ interface Q {
   auto_rule?: { eligible: boolean; enabled: boolean; reasons: string[]; margin_pct?: number; discount_pct?: number } | null
   group?: { name: string; code: string; area: string | null; members: number; discount_pct: number; next?: { homes: number; discount_pct: number } } | null
   referrer?: { customer_name: string | null; job_number: string | null; referral_code: string | null } | null
-  me: { id: string; full_name: string; role: Role; phone: string | null; quotation_access?: boolean; quotation_view?: boolean }
+  me: { id: string; full_name: string; role: Role; phone: string | null; quotation_access?: boolean; quotation_view?: boolean; allocation_level?: AllocationLevel }
   change_requests?: ChangeRequest[]
   dcr_kw?: number | null
   panel_mix?: { type: string; brand: string; wp: number; count: number; kwp: number }[] | null
@@ -98,7 +99,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 export default function QuotationDetailClient({ id }: { id: string }) {
   const router = useRouter()
   const [q, setQ] = useState<Q | null>(null)
-  const [staff, setStaff] = useState<(Person & { role: string })[]>([])
+  const [staff, setStaff] = useState<(Person & { role: string; allocation_level?: AllocationLevel })[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null)
@@ -280,6 +281,8 @@ Reason (e.g. duplicate, test, wrong customer):`)
 
   const me = q.me
   const can = availableActions(q, me.role, me.id, !!me.quotation_access)
+  // Sr / Jr Admin Managers allocate the work too (Jr: not to a Sr Admin Manager); the database checks it
+  const canReassign = can.reassign || (canAllocate(me.role, me.allocation_level) && q.status !== 'project_created')
   const step = flowStep(q.status)
   const portalUrl = typeof window !== 'undefined' ? `${window.location.origin}/portal/${q.portal_token}` : ''
   const shared = ['sent_to_customer', 'customer_accepted', 'advance_pending', 'project_created'].includes(q.status)
@@ -290,7 +293,8 @@ Reason (e.g. duplicate, test, wrong customer):`)
   const custMsg = `Dear ${q.customer_name}, thank you for considering Greenergy Solar Solutions. Your solar quotation ${q.quotation_number} (${kw ?? ''} kW, ${inr(total)} incl. GST) is ready: ${portalUrl}\nYou can view, print and accept it online. For any questions call +91 99432 56109.`
   const mgrMsg = `Follow-up: quotation ${q.quotation_number} for ${q.customer_name} (${q.mobile}), ${kw ?? ''} kW, ${inr(total)}. ${typeof window !== 'undefined' ? window.location.href : ''}`
   // Admin managers first in the lists (the usual follow-up people), then everyone else
-  const people = [...staff].sort((a, b) => Number(b.role === 'task_manager') - Number(a.role === 'task_manager') || a.full_name.localeCompare(b.full_name))
+  const people = [...staff].sort((a, b) => Number(b.role === 'task_manager' || !!b.allocation_level) - Number(a.role === 'task_manager' || !!a.allocation_level) || a.full_name.localeCompare(b.full_name))
+  const givable = new Set(allocatable(people, me.role, me.allocation_level).map(p => p.id))
   const personOf: Record<string, Person | null> = { assigned_engineer_id: q.assigned_engineer, assigned_sales_id: q.assigned_sales, follow_up_manager_id: q.follow_up_manager }
   const workMsg = (job: string) => `Hi, you have been given work in the Greenergy CRM: ${job} for ${q.customer_name} (${q.mobile}${q.city ? ', ' + q.city : ''}), ${q.quotation_number}${job.startsWith('Site') && q.site_visit_at ? ', visit on ' + fmtWhen(q.site_visit_at) : ''}. ${typeof window !== 'undefined' ? window.location.href : ''}`
 
@@ -687,9 +691,11 @@ Reason (e.g. duplicate, test, wrong customer):`)
                   return (
                     <div key={j.key}>
                       <Field label={j.label}>
-                        <select className={INPUT} disabled={!can.reassign} value={form[j.key]} onChange={e => set(j.key, e.target.value)}>
+                        <select className={INPUT} disabled={!canReassign} value={form[j.key]} onChange={e => set(j.key, e.target.value)}>
                           <option value="">— not given to anyone —</option>
-                          {people.map(s => <option key={s.id} value={s.id}>{s.full_name} · {ROLE_LABELS[s.role as Role] ?? s.role}</option>)}
+                          {people.filter(s => !canReassign || givable.has(s.id) || s.id === form[j.key]).map(s => (
+                            <option key={s.id} value={s.id} disabled={canReassign && !givable.has(s.id)}>
+                              {s.full_name} · {personTitle(s, ROLE_LABELS)}{canReassign && !givable.has(s.id) ? ' (only the Sr Admin Manager or CEO can change this)' : ''}</option>))}
                         </select>
                       </Field>
                       {p && p.id !== me.id && (
@@ -701,10 +707,10 @@ Reason (e.g. duplicate, test, wrong customer):`)
                 })}
                 {PRE_VISIT.includes(q.status) && (
                   <Field label="Site visit date & time">
-                    <input className={INPUT} type="datetime-local" disabled={!can.reassign} value={form.site_visit_at} onChange={e => set('site_visit_at', e.target.value)} />
+                    <input className={INPUT} type="datetime-local" disabled={!canReassign} value={form.site_visit_at} onChange={e => set('site_visit_at', e.target.value)} />
                   </Field>
                 )}
-                {can.reassign && <button className="w-full py-2 bg-slate-800 text-white text-sm font-semibold rounded-lg disabled:opacity-50" disabled={!!busy}
+                {canReassign && <button className="w-full py-2 bg-slate-800 text-white text-sm font-semibold rounded-lg disabled:opacity-50" disabled={!!busy}
                   onClick={savePeople}>{busy === 'assign' || busy === 'schedule_visit' ? <Loader2 size={14} className="animate-spin inline mr-1" /> : null}Save &amp; notify</button>}
                 <p className="text-[11px] text-slate-400">Any staff member can do any job, and one person can do several. Each person gets a notification and sees it under Quotations → My work. Only the CEO approves.</p>
               </div>

@@ -66,6 +66,8 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
   const t = todayIso()
   const uid = user?.id ?? ''
   const isMgr = me?.role === 'admin' || me?.role === 'task_manager'
+  // Sr / Jr Admin Managers allocate the work (allocation_levels_v1.sql)
+  const allocator = isMgr || !!(me as { allocation_level?: string | null } | null)?.allocation_level
   const lists: Record<string, Row[]> = {
     mine:       all.filter(r => myTask(r, uid)),
     unassigned: all.filter(r => !['project_created', 'cancelled', 'rejected'].includes(r.status) && (!r.assigned_sales_id || !r.follow_up_manager_id)),
@@ -81,7 +83,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
   }
   const view = TABS.some(x => x.key === searchParams.view) ? searchParams.view!
     : me?.role === 'admin' && lists.approvals.length ? 'approvals'
-    : isMgr && lists.unassigned.length ? 'unassigned'
+    : allocator && lists.unassigned.length ? 'unassigned'
     : lists.mine.length ? 'mine' : 'followups'
   const term = (searchParams.q ?? '').trim().toLowerCase()
   const delegate = !!(me as { quotation_access?: boolean } | null)?.quotation_access
@@ -100,7 +102,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
             <input name="q" defaultValue={searchParams.q ?? ''} placeholder="Search name, mobile, number, town…" aria-label="Search quotations"
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
           </form>
-          {(isMgr || delegate || viewer) && (
+          {(isMgr || delegate || viewer || allocator) && (
             <Link href="/staff/quotations/enquiry" className="flex items-center gap-1.5 px-4 py-2 bg-white border border-green-600 text-green-700 text-sm font-semibold rounded-lg hover:bg-green-50">
               <Phone size={15} /> Log phone enquiry
             </Link>
@@ -111,7 +113,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
         </div>
 
         <nav className="flex gap-1 overflow-x-auto bg-white border border-slate-100 rounded-xl p-1" aria-label="Quotation views">
-          {TABS.filter(x => (x.key !== 'approvals' && x.key !== 'unassigned') || isMgr).map(tab => (
+          {TABS.filter(x => x.key === 'unassigned' ? allocator : x.key !== 'approvals' || isMgr).map(tab => (
             <Link key={tab.key} href={`/staff/quotations?view=${tab.key}`}
               className={`px-3 py-2 rounded-lg text-xs font-semibold whitespace-nowrap ${view === tab.key ? 'bg-green-600 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>
               {tab.label} <span className={`ml-1 ${view === tab.key ? 'text-green-100' : 'text-slate-400'}`}>{lists[tab.key].length}</span>

@@ -16,6 +16,7 @@ interface Employee {
   price_access: string | null
   quotation_access?: boolean
   quotation_view?: boolean
+  allocation_level?: 'senior' | 'junior' | null
 }
 type Tab = 'pending' | 'employees'
 const ROLE_LABEL: Record<string, string> = { employee: 'Staff (sales / field)', task_manager: 'Admin manager', admin: 'CEO (admin)' }
@@ -109,6 +110,16 @@ export default function UserManagementPage() {
       await manage({ user_id: emp.id, action: 'quotation_access', value: on })
       setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, quotation_access: on } : e))
       showToast(on ? `✅ ${emp.full_name} can now edit and delete quotations` : `${emp.full_name} can no longer delete quotations`)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
+  }
+
+  // Sr / Jr Admin Manager: who this person may allocate work to (tasks, quotation people, service jobs)
+  const handleAllocationLevel = async (emp: Employee, level: string) => {
+    const lv = level === 'senior' || level === 'junior' ? level : null
+    try {
+      await manage({ user_id: emp.id, action: 'allocation_level', value: lv })
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, allocation_level: lv, designation: lv ? (lv === 'senior' ? 'Sr Admin Manager' : 'Jr Admin Manager') : e.designation } : e))
+      showToast(lv ? `✅ ${emp.full_name} is now ${lv === 'senior' ? 'Sr Admin Manager — can allocate work to anyone' : 'Jr Admin Manager — can allocate work to anyone except a Sr Admin Manager'}` : `${emp.full_name} no longer allocates work`)
     } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
   }
 
@@ -347,7 +358,7 @@ ${a.link}`
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-100">
                   <tr>
-                    {['Name','Email','Designation','Role','Price list access','Quotations','Status','Actions'].map(h => (
+                    {['Name','Email','Designation','Role','Allocates work','Price list access','Quotations','Status','Actions'].map(h => (
                       <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                     ))}
                   </tr>
@@ -376,6 +387,18 @@ ${a.link}`
                             <option value="admin">CEO (admin)</option>
                           </select>
                         </div>
+                      </td>
+                      <td className="px-4 py-4">
+                        {emp.role === 'admin' ? <span className="text-xs text-slate-500">Anyone (CEO)</span>
+                          : emp.role === 'task_manager' ? <span className="text-xs text-slate-500">Anyone (admin manager)</span> : (
+                          <select value={emp.allocation_level ?? ''} onChange={e => handleAllocationLevel(emp, e.target.value)} aria-label={`Allocates work: ${emp.full_name}`}
+                            title="Sr Admin Manager: allocates work to anyone. Jr Admin Manager: to anyone except a Sr Admin Manager."
+                            className="text-xs bg-transparent text-slate-700 border border-slate-200 rounded px-1 py-0.5 cursor-pointer">
+                            <option value="">No</option>
+                            <option value="senior">Sr Admin Manager</option>
+                            <option value="junior">Jr Admin Manager</option>
+                          </select>
+                        )}
                       </td>
                       <td className="px-4 py-4">
                         {emp.role === 'admin' ? <span className="text-xs text-slate-500">Full (CEO)</span> : (

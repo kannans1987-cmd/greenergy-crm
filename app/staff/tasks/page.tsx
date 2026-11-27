@@ -5,6 +5,8 @@ import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format } from 'date-fns'
 import { Plus, CheckCircle, Clock, AlertCircle, ChevronDown, Trash2 } from 'lucide-react'
+import { canAllocate, allocatable, personTitle, LEVEL_TITLE, ALLOCATION_RULE, type AllocationLevel } from '@/lib/allocation'
+import { ROLE_LABELS } from '@/lib/workflow'
 
 interface Task {
   id: string
@@ -19,12 +21,15 @@ interface Task {
   projects: { name: string } | null
   assignee: { full_name: string } | null
   assigner: { full_name: string } | null
+  assigned_to?: string | null
+  assigned_by?: string | null
 }
 
 interface Profile {
   id: string
   full_name: string
   role: string
+  allocation_level?: AllocationLevel
 }
 
 interface Project {
@@ -175,6 +180,7 @@ export default function TasksPage() {
   const [loading,   setLoading]   = useState(true)
   const [showCreate,setShowCreate]= useState(false)
   const [activeTab, setActiveTab] = useState<'pending'|'in_progress'|'completed'|'all'>('pending')
+  const [whose,     setWhose]     = useState<'all' | 'mine' | 'given'>('all')
 
   // Create task form
   const [newTask, setNewTask] = useState({
@@ -187,10 +193,10 @@ export default function TasksPage() {
 
   const loadTasks = useCallback(async (uid: string, role: string) => {
     let q = supabase.from('tasks').select(
-      'id,title,description,priority,status,due_date,due_time,completion_notes,completed_at,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)'
+      'id,title,description,priority,status,due_date,due_time,completion_notes,completed_at,assigned_to,assigned_by,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)'
     ).order('created_at', { ascending: false })
 
-    if (role === 'employee') q = q.eq('assigned_to', uid)
+    if (role === 'employee') q = q.or(`assigned_to.eq.${uid},assigned_by.eq.${uid}`)
 
     const { data } = await q
     if (data) setTasks(data as unknown as Task[])
@@ -202,18 +208,21 @@ export default function TasksPage() {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
-      const { data: prof } = await supabase.from('profiles').select('id,full_name,role').eq('id', user.id).single()
+      // '*' so this works before the allocation_level column exists
+      const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
       if (prof) setProfile(prof as Profile)
 
       const role = (prof as Profile)?.role ?? 'employee'
-      await loadTasks(user.id, role)
+      const level = (prof as Profile)?.allocation_level ?? null
+      // Sr / Jr Admin Managers see every task, like managers
+      await loadTasks(user.id, canAllocate(role, level) ? 'manager' : role)
 
-      if (role !== 'employee') {
-        const [{ data: emps }, { data: proj }] = await Promise.all([
-          supabase.from('profiles').select('id,full_name,role').eq('status', 'active').order('full_name'),
+      if (canAllocate(role, level)) {
+        const [emps, { data: proj }] = await Promise.all([
+          fetch('/api/profiles').then(r => r.ok ? r.json() : { profiles: [] }).catch(() => ({ profiles: [] })),
           supabase.from('projects').select('id,name').eq('status', 'in_progress').order('name'),
         ])
-        if (emps) setEmployees(emps as Profile[])
+        setEmployees(allocatable((emps.profiles ?? []) as Profile[], role, level))
         if (proj) setProjects(proj as Project[])
       }
     }
@@ -225,7 +234,8 @@ export default function TasksPage() {
     if (notes)                    updates.completion_notes = notes
     if (status === 'completed')   updates.completed_at     = new Date().toISOString()
 
-    await supabase.from('tasks').update(updates).eq('id', id)
+    const { data, error } = await supabase.from('tasks').update(updates).eq('id', id).select('id')
+    if (error || !data?.length) { setNotice(error?.message ?? 'Only the person doing the task, the person who gave it, or a manager can change it.'); return }
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status, completion_notes: notes ?? t.completion_notes } : t))
   }
 
@@ -260,9 +270,11 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
       due_time:     newTask.due_time    || null,
       assigned_by:  user.id,
       status:       'pending',
-    }).select('id,title,description,priority,status,due_date,due_time,completion_notes,completed_at,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)').single()
+    }).select('id,title,description,priority,status,due_date,due_time,completion_notes,completed_at,assigned_to,assigned_by,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)').single()
 
+    if (error) setNotice(error.message)
     if (!error && data) {
+      setNotice(`Task given${newTask.assigned_to ? ' to ' + (employees.find(x => x.id === newTask.assigned_to)?.full_name ?? '') + ' — they have been notified' : ''}`)
       setTasks(prev => [data as unknown as Task, ...prev])
       setNewTask({ title: '', description: '', assigned_to: '', project_id: '', priority: 'medium', due_date: '', due_time: '' })
       setShowCreate(false)
@@ -271,11 +283,15 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
   }
 
   const filteredTasks = tasks.filter(t => {
+    if (whose === 'mine' && t.assigned_to !== profile?.id) return false
+    if (whose === 'given' && t.assigned_by !== profile?.id) return false
     if (activeTab === 'all') return true
     return t.status === activeTab
   })
 
-  const isManager = profile?.role !== 'employee'
+  // CEO, admin manager, Sr / Jr Admin Manager give tasks
+  const isManager = canAllocate(profile?.role, profile?.allocation_level)
+  const fullManager = profile?.role === 'admin' || profile?.role === 'task_manager'
   const counts = {
     pending:     tasks.filter(t => t.status === 'pending').length,
     in_progress: tasks.filter(t => t.status === 'in_progress').length,
@@ -291,7 +307,7 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
-      <Header title="Tasks" subtitle={isManager ? 'Assign and manage team tasks' : 'Your assigned tasks'} />
+      <Header title="Tasks" subtitle={isManager ? (profile?.role === 'employee' && profile?.allocation_level ? `${LEVEL_TITLE[profile.allocation_level]} · ${ALLOCATION_RULE[profile.allocation_level]}` : 'Assign and manage team tasks') : 'Your assigned tasks'} />
 
       <div className="flex-1 p-4 sm:p-6 max-w-4xl mx-auto w-full space-y-5">
 
@@ -311,6 +327,12 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
             ))}
           </div>
 
+          {isManager && (
+            <select value={whose} onChange={e => setWhose(e.target.value as 'all' | 'mine' | 'given')} aria-label="Whose tasks"
+              className="px-3 py-2 border border-slate-200 rounded-xl text-xs font-semibold bg-white text-slate-600">
+              <option value="all">Everyone&apos;s tasks</option><option value="mine">For me</option><option value="given">Given by me</option>
+            </select>
+          )}
           {isManager && (
             <button
               onClick={() => setShowCreate(!showCreate)}
@@ -346,7 +368,7 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
                 <select value={newTask.assigned_to} onChange={e => setNewTask(p => ({ ...p, assigned_to: e.target.value }))}
                   className="px-4 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500">
                   <option value="">Assign to…</option>
-                  {employees.map(e => <option key={e.id} value={e.id}>{e.full_name}</option>)}
+                  {employees.map(e => <option key={e.id} value={e.id}>{e.full_name} · {personTitle(e, ROLE_LABELS)}</option>)}
                 </select>
                 <select value={newTask.project_id} onChange={e => setNewTask(p => ({ ...p, project_id: e.target.value }))}
                   className="px-4 py-2.5 border border-slate-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500">
@@ -391,7 +413,7 @@ This cannot be undone.${task.assignee && !['completed', 'cancelled'].includes(ta
               key={task.id}
               task={task}
               onUpdate={handleUpdateTask}
-              canEdit={isManager || true}
+              canEdit={fullManager || task.assigned_to === profile?.id || task.assigned_by === profile?.id}
               onDelete={profile?.role === 'admin' ? handleDeleteTask : undefined}
             />
           ))}

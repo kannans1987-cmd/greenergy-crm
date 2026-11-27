@@ -43,7 +43,7 @@ export default function PhoneEnquiryPage() {
 
   useEffect(() => {
     fetch('/api/profiles').then(r => r.ok ? r.json() : { profiles: [] }).then(d => setPeople(d.profiles ?? [])).catch(() => {})
-    fetch('/api/profiles?me=1').then(r => r.ok ? r.json() : null).then(d => { setRole(d?.me?.role ?? 'employee'); setDelegate(!!d?.me?.quotation_access); setViewer(!!d?.me?.quotation_view) }).catch(() => {})
+    fetch('/api/profiles?me=1').then(r => r.ok ? r.json() : null).then(d => { setRole(d?.me?.role ?? 'employee'); setDelegate(!!d?.me?.quotation_access); setViewer(!!d?.me?.quotation_view || !!d?.me?.allocation_level) }).catch(() => {})
   }, [])
 
   // Warn when this mobile number already has an enquiry

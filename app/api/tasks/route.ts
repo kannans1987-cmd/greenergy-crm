@@ -6,8 +6,9 @@ export async function GET(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+  const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
   const role = profile?.role ?? 'employee'
+  const allocator = role !== 'employee' || !!profile?.allocation_level
 
   const url    = new URL(req.url)
   const status = url.searchParams.get('status')
@@ -16,7 +17,7 @@ export async function GET(req: NextRequest) {
     'id,title,description,priority,status,due_date,due_time,completion_notes,completed_at,created_at,projects(name),assignee:assigned_to(full_name),assigner:assigned_by(full_name)'
   ).order('created_at', { ascending: false })
 
-  if (role === 'employee') q = q.eq('assigned_to', user.id)
+  if (!allocator) q = q.eq('assigned_to', user.id)
   if (status) q = q.eq('status', status)
 
   const { data, error } = await q
@@ -29,8 +30,8 @@ export async function POST(req: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data: profile } = await supabase.from('profiles').select('role').eq('id', user.id).single()
-  if (profile?.role === 'employee') return NextResponse.json({ error: 'Employees cannot create tasks.' }, { status: 403 })
+  const { data: profile } = await supabase.from('profiles').select('*').eq('id', user.id).single()
+  if (profile?.role === 'employee' && !profile?.allocation_level) return NextResponse.json({ error: 'Only the CEO, the admin manager or a Sr / Jr Admin Manager can give tasks.' }, { status: 403 })
 
   const body = await req.json()
   const { title, description, assigned_to, project_id, priority, due_date, due_time } = body

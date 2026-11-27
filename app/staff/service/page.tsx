@@ -8,6 +8,7 @@ import Header from '@/components/staff/Header'
 import { createClient } from '@/lib/supabase/client'
 import { inr, todayIso, isManager } from '@/lib/workflow'
 import { SERVICE_KINDS, SERVICE_STATUS, SERVICE_STATUS_COLORS, daysBetween } from '@/lib/growth'
+import { canAllocate, allocatable, type AllocationLevel } from '@/lib/allocation'
 
 // Service after installation: breakdown / cleaning / inspection jobs and yearly maintenance contracts (AMC).
 // Technicians see the jobs given to them; the CEO and admin manager see everything and sell / renew AMCs.
@@ -23,7 +24,7 @@ function ServicePage() {
   const supabase = createClient()
   const params = useSearchParams()
   const [tab, setTab] = useState<'jobs' | 'amc'>(params.get('tab') === 'amc' ? 'amc' : 'jobs')
-  const [me, setMe] = useState<{ id: string; role: string } | null>(null)
+  const [me, setMe] = useState<{ id: string; role: string; allocation_level?: AllocationLevel } | null>(null)
   const [tickets, setTickets] = useState<Row[]>([])
   const [contracts, setContracts] = useState<Row[]>([])
   const [projects, setProjects] = useState<Row[]>([])
@@ -36,21 +37,24 @@ function ServicePage() {
   const [missing, setMissing] = useState(false)
   const today = todayIso()
   const mgr = isManager(me?.role)
+  // Sr / Jr Admin Managers give service jobs to technicians (the database checks who to)
+  const alloc = canAllocate(me?.role, me?.allocation_level)
   const say = (t: string, ok = true) => { setMsg({ t, ok }); setTimeout(() => setMsg(null), 5000) }
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
-    const { data: prof } = await supabase.from('profiles').select('id, role').eq('id', user.id).single()
+    const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).single()
     setMe(prof)
     const [t, c, p, s] = await Promise.all([
       supabase.from('service_tickets').select('*, technician:assigned_to(full_name)').order('due_date').limit(1000),
       isManager(prof?.role) ? supabase.from('service_contracts').select('*').order('end_date').limit(1000) : Promise.resolve({ data: [], error: null }),
       isManager(prof?.role) ? supabase.from('projects').select('id, job_number, customer_name, customer_mobile, site_address, capacity_kwp, region').not('job_number', 'is', null).order('created_at', { ascending: false }) : Promise.resolve({ data: [], error: null }),
-      supabase.from('profiles').select('id, full_name, role').eq('status', 'active').neq('role', 'admin').order('full_name'),
+      fetch('/api/profiles').then(r => r.ok ? r.json() : { profiles: [] }).catch(() => ({ profiles: [] })),
     ])
     setMissing(!!t.error && /service_tickets|schema cache/i.test(t.error.message))
-    setTickets(t.data ?? []); setContracts(c.data ?? []); setProjects(p.data ?? []); setStaff(s.data ?? [])
+    setTickets(t.data ?? []); setContracts(c.data ?? []); setProjects(p.data ?? [])
+    setStaff(allocatable(((s.profiles ?? []) as (Row & { id: string })[]).filter(x => x.role !== 'admin'), prof?.role, prof?.allocation_level))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => { load() }, [load])
@@ -75,10 +79,19 @@ function ServicePage() {
       region: form.region || 'puducherry', kind: form.kind || 'breakdown', priority: form.priority || 'normal', description: form.description.trim(),
       project_id: form.project_id || null, scheduled_for: form.scheduled_for || null, created_by: me?.id }
     if (mgr) Object.assign(row, { assigned_to: form.assigned_to || null, chargeable: !!form.chargeable, charge_amount: Number(form.charge_amount) || 0 })
+    else if (alloc) Object.assign(row, { assigned_to: form.assigned_to || null })
     const { error } = await supabase.from('service_tickets').insert(row)
     setBusy(false)
     if (error) return say(error.message, false)
-    say(mgr ? 'Service job created' + (row.assigned_to ? ' and the technician told' : '') : 'Reported. The admin manager will assign it.'); setForm(null); load()
+    say(alloc ? 'Service job created' + (row.assigned_to ? ' and the technician told' : '') : 'Reported. The admin manager will assign it.'); setForm(null); load()
+  }
+
+  // Give an existing job to a technician (or take it back)
+  async function assignTicket(t: Row, to: string) {
+    const { data, error } = await supabase.from('service_tickets').update({ assigned_to: to || null }).eq('id', t.id).select('id')
+    if (error || !data?.length) return say(error?.message ?? 'Could not change the technician.', false)
+    say(to ? `${t.ticket_number} given to ${staff.find(x => x.id === to)?.full_name ?? 'the technician'} — they have been told` : `${t.ticket_number} is now unassigned`)
+    load()
   }
 
   async function saveAmc() {
@@ -113,7 +126,7 @@ function ServicePage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-slate-50">
-      <Header title="Service" subtitle={mgr ? 'Service jobs and maintenance contracts (AMC)' : 'Service jobs given to you'} />
+      <Header title="Service" subtitle={mgr ? 'Service jobs and maintenance contracts (AMC)' : alloc ? 'Service jobs: give them to technicians' : 'Service jobs given to you'} />
       {msg && <div role="status" className={`fixed top-16 right-4 z-50 px-4 py-3 rounded-xl shadow-xl text-sm text-white ${msg.ok ? 'bg-green-600' : 'bg-red-600'}`}>{msg.t}</div>}
       <div className="flex-1 p-4 sm:p-6 max-w-6xl mx-auto w-full space-y-5">
         {missing && <p className="text-sm bg-amber-50 text-amber-800 rounded-lg px-3 py-2">The service database update has not been run yet (supabase/service_v1.sql).</p>}
@@ -122,14 +135,14 @@ function ServicePage() {
             <button key={k} onClick={() => setTab(k)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${tab === k ? 'bg-slate-900 text-white' : 'bg-white border border-slate-200 text-slate-600'}`}>
               {k === 'jobs' ? `Service jobs (${tickets.filter(t => ['open', 'assigned', 'in_progress'].includes(t.status)).length} open)` : `AMC contracts (${activeAmc.length} active)`}</button>))}
           <span className="ml-auto flex gap-2">
-            <button onClick={() => { setAmc(null); setForm({ kind: 'breakdown', priority: 'normal', region: 'puducherry' }) }} className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold flex items-center gap-1"><Plus size={14} /> {mgr ? 'New service job' : 'Report a fault'}</button>
+            <button onClick={() => { setAmc(null); setForm({ kind: 'breakdown', priority: 'normal', region: 'puducherry' }) }} className="px-3 py-2 bg-green-600 text-white rounded-lg text-sm font-semibold flex items-center gap-1"><Plus size={14} /> {alloc ? 'New service job' : 'Report a fault'}</button>
             {mgr && <button onClick={() => { setForm(null); setAmc({ start_date: today, visits_per_year: 2, includes_cleaning: true, plan: 'Standard', region: 'puducherry' }) }} className="px-3 py-2 bg-slate-800 text-white rounded-lg text-sm font-semibold flex items-center gap-1"><Plus size={14} /> New AMC</button>}
           </span>
         </div>
 
         {form && (
           <div className={`${CARD} p-5 space-y-3`}>
-            <h2 className="font-semibold text-sm">{mgr ? 'New service job' : 'Report a fault at a customer site'}</h2>
+            <h2 className="font-semibold text-sm">{alloc ? 'New service job' : 'Report a fault at a customer site'}</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {mgr && <F label="Customer from a job card (fills the details)" wide><select className={INPUT} value={form.project_id ?? ''} onChange={e => fromProject(e.target.value, setForm, form)}>
                 <option value="">— not our installation / type below —</option>{projects.map(p => <option key={p.id} value={p.id}>{p.job_number} · {p.customer_name}</option>)}</select></F>}
@@ -142,6 +155,8 @@ function ServicePage() {
                 <option value="urgent">Urgent: next day</option><option value="high">High: 2 days</option><option value="normal">Normal: 3 days</option><option value="low">Low: 7 days</option></select></F>
               <F label="What is wrong / what to do *" wide><textarea className={INPUT} rows={3} maxLength={2000} value={form.description ?? ''} onChange={e => setForm({ ...form, description: e.target.value })}
                 placeholder="e.g. Inverter shows grid fault since yesterday; generation zero" /></F>
+              {alloc && !mgr && <F label="Technician"><select className={INPUT} value={form.assigned_to ?? ''} onChange={e => setForm({ ...form, assigned_to: e.target.value })}>
+                  <option value="">— assign later —</option>{staff.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select></F>}
               {mgr && <>
                 <F label="Technician"><select className={INPUT} value={form.assigned_to ?? ''} onChange={e => setForm({ ...form, assigned_to: e.target.value })}>
                   <option value="">— assign later —</option>{staff.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select></F>
@@ -193,7 +208,14 @@ function ServicePage() {
                       <td className="px-4 py-2"><Link href={`/staff/service/${t.id}`} className="font-mono text-xs text-green-700 hover:underline">{t.ticket_number}</Link></td>
                       <td className="px-4 py-2"><p className="font-medium">{t.customer_name}</p><p className="text-xs text-slate-500 truncate max-w-[220px]">{t.description}</p></td>
                       <td className="px-4 py-2 text-slate-600">{SERVICE_KINDS[t.kind] ?? t.kind}{t.chargeable && <span className="block text-xs text-slate-500">{inr(t.charge_amount)} + GST</span>}</td>
-                      <td className="px-4 py-2 text-slate-600">{t.technician?.full_name ?? <span className="text-amber-700">not assigned</span>}</td>
+                      <td className="px-4 py-2 text-slate-600">
+                        {alloc && ['open', 'assigned'].includes(t.status) && (!t.assigned_to || staff.some(s => s.id === t.assigned_to)) ? (
+                          <select className="border border-slate-200 rounded-md px-1.5 py-1 text-xs bg-white max-w-[160px]" value={t.assigned_to ?? ''} aria-label={`Technician for ${t.ticket_number}`}
+                            onChange={e => assignTicket(t, e.target.value)}>
+                            <option value="">— not assigned —</option>{staff.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                          </select>
+                        ) : t.technician?.full_name ?? <span className="text-amber-700">not assigned</span>}
+                      </td>
                       <td className={`px-4 py-2 tabular-nums ${late ? 'text-red-600 font-semibold' : 'text-slate-600'}`}>{t.scheduled_for && t.kind === 'amc_visit' ? `visit ${t.scheduled_for}` : t.due_date}{late && <span className="block text-xs">{daysBetween(t.due_date)} d late</span>}</td>
                       <td className="px-4 py-2"><span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${SERVICE_STATUS_COLORS[t.status] ?? ''}`}>{SERVICE_STATUS[t.status] ?? t.status}</span></td>
                     </tr>)

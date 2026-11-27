@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireStaff, dbError, canManageQuotations } from '@/lib/staff'
+import { requireStaff, dbError, canManageQuotations, canAllocateWork } from '@/lib/staff'
 import { createAdminClient } from '@/lib/supabase/server'
 import { buildPrice, isManager, isEditable as isEditableStatus } from '@/lib/workflow'
 import { loadPricing, toOpts, quotationColumns, saveCosting } from '@/lib/pricing-server'
@@ -122,7 +122,8 @@ export async function PATCH(
     else { delete updates.dcr_kw; delete updates.panel_brand_nondcr; delete updates.inverter_phase }
   }
   for (const f of MANAGER_FIELDS) if (f in body) {
-    if (!isManager(me.role)) return NextResponse.json({ error: 'Only the CEO or admin manager can reassign a quotation.' }, { status: 403 })
+    // The database also checks who each person may give work to (Jr Admin Manager: not to a Sr Admin Manager)
+    if (!canAllocateWork(me)) return NextResponse.json({ error: 'Only the CEO, the admin manager or a Sr / Jr Admin Manager can allocate the work.' }, { status: 403 })
     updates[f] = body[f] || null
   }
   if (!Object.keys(updates).length && !('line_items' in body) && !body.reprice) return NextResponse.json({ error: 'Nothing to update.' }, { status: 400 })

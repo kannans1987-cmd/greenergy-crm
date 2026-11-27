@@ -134,9 +134,25 @@ export async function POST(req: NextRequest) {
     solarType: solarType ?? 'ongrid', panelType: wantsSubsidy ? 'DCR' : 'NonDCR' }) : null
   const totalBefore = listPrice ? listPrice.total : num('total_cost_before_subsidy')
 
-  const { data: quotation, error } = await supabase
-    .from('quotation_requests')
-    .insert({
+  // Growth fields (growth_v1.sql): bill range, PIN code, referral / neighbour-group codes from the website link
+  const growth: Record<string, unknown> = {}
+  const billRange = str('monthly_bill_range')
+  if (billRange) growth.monthly_bill_range = billRange.slice(0, 40)
+  const pin = (str('pincode') ?? '').replace(/\D/g, '')
+  if (/^\d{6}$/.test(pin)) growth.pincode = pin
+  const refCode = (str('referral_code') ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12)
+  const groupCode = (str('group_code') ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12)
+  if (refCode) {
+    const { data: ref } = await supabase.from('projects').select('id').eq('referral_code', refCode).maybeSingle()
+    if (ref) growth.referred_by_project = ref.id
+  }
+  if (groupCode) {
+    const { data: g } = await supabase.from('group_buys').select('id').eq('code', groupCode).eq('status', 'open').maybeSingle()
+    if (g) growth.group_buy_id = g.id
+  }
+  const leadSource = growth.referred_by_project && (str('source') || 'website') === 'website' ? 'referral' : (str('source') || 'website')
+
+  const insertRow = {
       customer_name,
       mobile,
       email:                     str('email'),
@@ -156,7 +172,7 @@ export async function POST(req: NextRequest) {
       subsidy_required:          bool('subsidy_required'),
       site_visit_required:       bool('site_visit_required'),
       notes:                     str('notes'),
-      source:                    str('source') || 'website',
+      source:                    leadSource,
       recommended_capacity_kw:   listed ? kw : num('recommended_capacity_kw'),
       estimated_daily_gen_kwh:   num('estimated_daily_gen_kwh'),
       estimated_monthly_gen_kwh: num('estimated_monthly_gen_kwh'),
@@ -176,9 +192,14 @@ export async function POST(req: NextRequest) {
       ...(listed ? (({ admin_capacity_kw: _a, price_per_kw: _p, priced_from_list: _f, ...spec }) => spec)(quotationColumns(listed.w, listed.month)) : {}),
       net_cost_after_subsidy:    totalBefore != null ? totalBefore - aid.total : null,
       status:                    'new',
-    })
-    .select()
-    .single()
+  }
+  let { data: quotation, error } = await supabase.from('quotation_requests').insert({ ...insertRow, ...growth }).select().single()
+  // Before growth_v1.sql is run the new columns do not exist: save the lead without them rather than lose it
+  if (error && Object.keys(growth).length && /column|schema cache/i.test(error.message)) {
+    ({ data: quotation, error } = await supabase.from('quotation_requests')
+      .insert({ ...insertRow, notes: [insertRow.notes, billRange && `Monthly bill: ${billRange}`, pin && `PIN: ${pin}`, refCode && `Referral code: ${refCode}`, groupCode && `Group: ${groupCode}`].filter(Boolean).join('\n') })
+      .select().single())
+  }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500, headers })
 
@@ -244,7 +265,7 @@ export async function POST(req: NextRequest) {
 
   // Website enquiries: tell the CEO and the admin managers straight away (CRM notification + email)
   let emailed = false
-  if ((str('source') || 'website') === 'website') {
+  if (['website', 'referral'].includes(leadSource)) {
     const { data: staff } = await supabase.from('profiles').select('id').in('role', ['admin', 'task_manager']).eq('status', 'active')
     if (staff?.length) {
       await supabase.from('notifications').insert(staff.map((p: { id: string }) => ({

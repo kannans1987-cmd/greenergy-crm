@@ -87,6 +87,7 @@ export default function EmployeeDashboard() {
   const [attendance,  setAttendance]  = useState<AttendanceRecord | null>(null)
   const [todayHours,  setTodayHours]  = useState(0)
   const [isCeo,       setIsCeo]       = useState(false)   // the CEO does not clock in
+  const [isMgr,       setIsMgr]       = useState(false)
   const [jobCards,    setJobCards]    = useState<JobCard[]>([])
   const [monthHours,  setMonthHours]  = useState(0)
   const [loading,     setLoading]     = useState(true)
@@ -118,7 +119,11 @@ export default function EmployeeDashboard() {
           .gte('date', format(new Date(), 'yyyy-MM-01')),
       ])
 
-      if (prof)        { setProfile(prof as unknown as { full_name: string }); setIsCeo((prof as { role?: string }).role === 'admin') }
+      if (prof)        { setProfile(prof as unknown as { full_name: string }); setIsCeo((prof as { role?: string }).role === 'admin')
+        const mgr = ['admin', 'task_manager'].includes((prof as { role?: string }).role ?? '')
+        setIsMgr(mgr)
+        if (mgr) supabase.rpc('run_scheduled_alerts').then(() => {}, () => {})   // due alerts (no-op if sent recently)
+      }
       if (todayTasks)  setTasks(todayTasks as unknown as Task[])
       if (todayAtt) {
         // Site / O&M staff can have several sessions a day: show the open one, else the last one
@@ -268,6 +273,8 @@ export default function EmployeeDashboard() {
               isCeo
                 ? { label: 'Team Attendance', href: '/staff/attendance', icon: '📍', color: 'bg-green-50 text-green-700 border-green-100' }
                 : { label: 'Clock In / Out', href: '/staff/attendance', icon: '📍', color: 'bg-green-50 text-green-700 border-green-100' },
+              ...(isMgr ? [{ label: 'Control room', href: '/staff/control', icon: '🚦', color: 'bg-red-50 text-red-700 border-red-100' },
+                { label: 'Sales insights', href: '/staff/insights', icon: '📈', color: 'bg-violet-50 text-violet-700 border-violet-100' }] : []),
               { label: 'View Tasks',     href: '/staff/tasks',       icon: '✓',  color: 'bg-blue-50 text-blue-700 border-blue-100' },
               { label: 'Job Cards',      href: '/staff/job-cards',   icon: '📋', color: 'bg-slate-50 text-slate-700 border-slate-200' },
               { label: 'Apply Leave',    href: '/staff/leave',       icon: '📅', color: 'bg-amber-50 text-amber-700 border-amber-100' },

@@ -27,3 +27,7 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 `task_delete_v1_test.sql` checks that only the CEO deletes tasks; it ends with `ALL TASK DELETE CHECKS PASSED`.
 
 `attendance_multi_v1_test.sql` checks several clock-ins a day for site / O&M staff and once a day for office staff; it ends with `ALL MULTI-SESSION ATTENDANCE CHECKS PASSED`.
+
+`growth_v1_test.sql` checks first contact and alerts, lost reasons, auto-approval, referrals, payments and the commissioning gate; it ends with `ALL GROWTH CHECKS PASSED`.
+
+`service_v1_test.sql` checks AMC contracts and visits, service jobs, technician rights, invoices and O&M clock-in on a job; it ends with `ALL SERVICE CHECKS PASSED`.

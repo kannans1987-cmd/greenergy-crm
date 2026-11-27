@@ -23,7 +23,7 @@ function Field({ label, children, wide }: { label: string; children: React.React
 const EMPTY = {
   customer_name: '', mobile: '', city: '', address: '', email: '', region: 'puducherry',
   consumer_type: 'domestic', solar_type: 'ongrid', required_capacity_kw: '', avg_monthly_bill: '',
-  source: 'phone', notes: '', priority: 'normal',
+  source: 'phone', notes: '', priority: 'normal', referral_code: '',
   lead_temperature: '', lead_note: '', next_follow_up_date: daysFromToday(1),
   assigned_engineer_id: '', assigned_sales_id: '', follow_up_manager_id: '', site_visit_at: '',
 }
@@ -128,6 +128,12 @@ export default function PhoneEnquiryPage() {
                   className={`px-3 py-1.5 rounded-full text-xs font-semibold border ${f.source === k ? 'bg-green-600 border-green-600 text-white' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{label}</button>
               ))}
             </div>
+            {f.source === 'referral' && (
+              <Field label="Referral code of the customer who sent them (optional, e.g. GK7M4Q)">
+                <input className={INPUT} value={f.referral_code} maxLength={12} onChange={e => set('referral_code', e.target.value.toUpperCase())}
+                  placeholder="On the referrer's commissioning report or ask them" />
+              </Field>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <Field label="Customer type"><select className={INPUT} value={f.consumer_type} onChange={e => set('consumer_type', e.target.value)}>
                 {['domestic', 'commercial', 'industrial', 'institution', 'agricultural'].map(x => <option key={x} value={x}>{x[0].toUpperCase() + x.slice(1)}</option>)}</select></Field>

@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format, differenceInMinutes } from 'date-fns'
 import { getBestFix, type Fix } from '@/lib/geo'
-import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2, Smartphone } from 'lucide-react'
+import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2, Smartphone, Wrench } from 'lucide-react'
 
 // Office staff clock in at the office (GPS must be inside the office radius — the database checks it).
 // Site staff clock in on their project. Managers see everyone's day; the CEO sets the office location.
@@ -30,7 +30,9 @@ interface AttendanceRecord {
   attendance_status: string
   projects: { name: string } | null
   office_locations?: { name: string } | null
+  service_ticket_id?: string | null
 }
+interface Ticket { id: string; ticket_number: string; customer_name: string; site_address: string | null; kind: string }
 interface Staff { id: string; full_name: string; designation: string | null; role: string; attendance_mode?: 'office' | 'field' | null }
 type Mode = 'office' | 'field'
 
@@ -120,7 +122,9 @@ export default function AttendancePage() {
   const [role,            setRole]            = useState<string>('employee')
   const [projects,        setProjects]        = useState<Project[]>([])
   const [offices,         setOffices]         = useState<Office[]>([])
-  const [workType,        setWorkType]        = useState<'office' | 'site'>('office')
+  const [workType,        setWorkType]        = useState<'office' | 'site' | 'service'>('office')
+  const [tickets,         setTickets]         = useState<Ticket[]>([])
+  const [selectedTicket,  setSelectedTicket]  = useState('')
   const [selectedProject, setSelectedProject] = useState('')
   const [todayRecs,       setTodayRecs]       = useState<AttendanceRecord[]>([])
   const [mode,            setMode]            = useState<Mode>('office')
@@ -240,6 +244,10 @@ export default function AttendancePage() {
     setProjects(proj)
     setTodayRecs((todayAtt as AttendanceRecord[]) ?? [])
     setHistory((hist as AttendanceRecord[]) ?? [])
+    // Service jobs given to this person (service_v1.sql); none before that update
+    const { data: tk } = await supabase.from('service_tickets').select('id, ticket_number, customer_name, site_address, kind')
+      .eq('assigned_to', uid).in('status', ['open', 'assigned', 'in_progress']).order('due_date')
+    setTickets((tk as Ticket[]) ?? [])
     await loadOffices()
     setPageLoading(false)
   }, [today, loadOffices, loadDevices])
@@ -267,6 +275,7 @@ export default function AttendancePage() {
 
   const handleClockIn = async () => {
     if (workType === 'site' && !selectedProject) { say('Please select the project / site before clocking in.', 'error'); return }
+    if (workType === 'service' && !selectedTicket) { say('Choose the service job you are at.', 'error'); return }
     if (workType === 'office' && activeOffices.length === 0) {
       say('The office location has not been set yet. Ask the CEO to set it (Attendance → Office location).', 'error'); return
     }
@@ -286,12 +295,14 @@ export default function AttendancePage() {
       const { data: newId, error } = await supabase.rpc('attendance_clock_in', {
         p_device:    deviceKey?.id ?? null,
         p_secret:    deviceKey?.secret ?? null,
-        p_work_type: workType,
+        p_work_type: workType === 'office' ? 'office' : 'site',
         p_project:   workType === 'site' ? selectedProject : null,
         p_lat:       fix.latitude,
         p_lng:       fix.longitude,
         p_accuracy:  fix.accuracy,
         p_address:   address,
+        // only sent for a service job, so clock-in keeps working before service_v1.sql is run
+        ...(workType === 'service' ? { p_ticket: selectedTicket } : {}),
       })
       if (error) throw new Error(friendly(error.message))
       const { data } = await supabase.from('attendance').select(SELECT).eq('id', newId as string).single()
@@ -408,7 +419,8 @@ export default function AttendancePage() {
   // Office staff: the day is complete after one clock-out. Site / O&M staff can start another session.
   const isClockedOut = !openRec && !multi && !!lastRec?.clock_out_time
   const placeOf = (r: AttendanceRecord) =>
-    r.work_type === 'office' ? `🏢 ${r.office_locations?.name ?? 'Office'}` : (r.projects?.name ?? '—')
+    r.work_type === 'office' ? `🏢 ${r.office_locations?.name ?? 'Office'}`
+      : r.service_ticket_id ? `🔧 Service job${r.projects?.name ? ' · ' + r.projects.name : ''}` : (r.projects?.name ?? '—')
 
   if (pageLoading) {
     return (
@@ -489,8 +501,8 @@ export default function AttendancePage() {
                   <>
                     <div>
                       <p className="block text-sm font-medium text-slate-700 mb-1.5">{multi && todayRecs.length ? 'Where are you now?' : 'Where are you working today?'}</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        {([['office', 'At the office', Building2], ['site', 'Project site', HardHat]] as const).map(([v, label, Icon]) => (
+                      <div className={`grid gap-2 ${tickets.length ? 'grid-cols-3' : 'grid-cols-2'}`}>
+                        {([['office', 'At the office', Building2], ['site', 'Project site', HardHat], ...(tickets.length ? [['service', 'Service job', Wrench]] as const : [])] as const).map(([v, label, Icon]) => (
                           <button key={v} type="button" onClick={() => { setWorkType(v); setStatus('') }}
                             className={`flex items-center justify-center gap-2 py-3 rounded-xl border text-sm font-semibold transition ${
                               workType === v ? 'border-green-600 bg-green-50 text-green-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
@@ -500,7 +512,17 @@ export default function AttendancePage() {
                       </div>
                     </div>
 
-                    {workType === 'office' ? (
+                    {workType === 'service' ? (
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1.5">Which service job? <span className="text-red-500">*</span></label>
+                        <select value={selectedTicket} onChange={e => setSelectedTicket(e.target.value)}
+                          className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                          <option value="">— Choose the job —</option>
+                          {tickets.map(t => <option key={t.id} value={t.id}>{t.ticket_number} · {t.customer_name}{t.site_address ? ' · ' + t.site_address.slice(0, 40) : ''}</option>)}
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1">Your time here is counted on this job. Clock out when you leave the customer.</p>
+                      </div>
+                    ) : workType === 'office' ? (
                       activeOffices.length === 0 ? (
                         <p className="text-sm text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-3">
                           ⚠ The office location has not been set yet. {isCeo ? 'Set it below in “Office location” (do it while you are at the office).' : 'Ask the CEO to set it.'}
@@ -567,7 +589,7 @@ export default function AttendancePage() {
 
                 <button
                   onClick={isClockedIn ? handleClockOut : handleClockIn}
-                  disabled={loading || !canClock || (!isClockedIn && workType === 'site' && !selectedProject) || (!isClockedIn && workType === 'office' && activeOffices.length === 0)}
+                  disabled={loading || !canClock || (!isClockedIn && workType === 'site' && !selectedProject) || (!isClockedIn && workType === 'service' && !selectedTicket) || (!isClockedIn && workType === 'office' && activeOffices.length === 0)}
                   className={`w-full py-4 rounded-xl font-bold text-white text-lg transition-all disabled:opacity-50 flex items-center justify-center gap-3 shadow-lg ${
                     isClockedIn ? 'bg-red-500 hover:bg-red-600 shadow-red-200' : 'bg-green-600 hover:bg-green-700 shadow-green-200'}`}>
                   {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />

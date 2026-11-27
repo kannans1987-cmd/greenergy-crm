@@ -16,6 +16,7 @@ import {
 import { getBestFix, mapLink } from '@/lib/geo'
 import CostingTable, { type Costing } from '@/components/staff/CostingTable'
 import HotColdPicker from '@/components/staff/HotColdPicker'
+import { LOST_REASONS, lostLabel, hoursAgo, groupLink } from '@/lib/growth'
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
 
@@ -52,6 +53,11 @@ interface Q {
   panel_brand: string | null; panel_wp: number | null; panel_count: number | null; inverter_brand: string | null; inverter_label: string | null
   system_phase: number | null; battery_label: string | null; battery_qty: number | null; priced_from_list: boolean; price_list_month: string | null
   costing: { data: Costing; catalogue_version: number | null; updated_at: string } | null
+  lost_reason_code?: string | null; first_contact_at?: string | null; monthly_bill_range?: string | null; pincode?: string | null
+  auto_approved?: boolean
+  auto_rule?: { eligible: boolean; enabled: boolean; reasons: string[]; margin_pct?: number; discount_pct?: number } | null
+  group?: { name: string; code: string; area: string | null; members: number; discount_pct: number; next?: { homes: number; discount_pct: number } } | null
+  referrer?: { customer_name: string | null; job_number: string | null; referral_code: string | null } | null
   me: { id: string; full_name: string; role: Role; phone: string | null; quotation_access?: boolean }
 }
 
@@ -94,6 +100,7 @@ export default function QuotationDetailClient({ id }: { id: string }) {
   const [comment, setComment] = useState({ text: '', internal: false })
   const [visit, setVisit] = useState<Record<string, string>>({})
   const [gpsMsg, setGpsMsg] = useState('')
+  const [lost, setLost] = useState<{ open: boolean; code: string; note: string }>({ open: false, code: '', note: '' })
   const [opts, setOpts] = useState<{ available: boolean; panelBrands?: { DCR: string[]; NonDCR: string[] }; inverterBrands?: { ongrid: string[]; hybrid: string[] } } | null>(null)
   useEffect(() => { fetch('/api/pricing/options').then(r => r.ok ? r.json() : null).then(setOpts).catch(() => {}) }, [])
 
@@ -172,11 +179,24 @@ export default function QuotationDetailClient({ id }: { id: string }) {
       line_items: items,
     }
     const ok = await call(`/api/quotations/${id}`, 'PATCH', body, reprice ? 'reprice' : 'save', reprice ? 'Re-priced from the price list' : 'Quotation saved')
-    if (ok && thenSubmit) await act('submit', {}, 'Submitted for CEO approval')
+    if (ok && thenSubmit) await submitForApproval()
     if (ok && thenApprove) {
       const sub = await act('submit', {}, 'Submitted')
       if (sub) await act('approve', { remarks: 'Edited and approved by the CEO' }, 'Saved and approved')
     }
+  }
+
+  async function submitForApproval() {
+    const r = await act('submit', {}, 'Submitted')
+    if (r?.auto_approved) show('Approved automatically — inside the CEO’s rules. Share it with the customer.')
+    else if (r) show('Submitted for CEO approval' + (r.auto_reasons?.length ? ' (needs the CEO: ' + r.auto_reasons.join('; ') + ')' : ''))
+  }
+
+  async function markLost() {
+    if (!lost.code) { show('Choose why the customer did not go ahead.', false); return }
+    if (!lost.note.trim()) { show('Add a short note (who they chose, what price, when to try again…).', false); return }
+    const r = await act('lose', { code: lost.code, remarks: lost.note.trim() }, 'Marked lost')
+    if (r) setLost({ open: false, code: '', note: '' })
   }
 
   // People: who does the visit, the quotation and the follow-up; plus the visit date
@@ -291,7 +311,49 @@ Reason (e.g. duplicate, test, wrong customer):`)
           {q.status === 'drafted' && q.admin_remarks && <p className="text-sm bg-amber-50 text-amber-800 rounded-lg px-3 py-2"><b>CEO note:</b> {q.admin_remarks}</p>}
           {q.status === 'rejected' && <p className="text-sm bg-red-50 text-red-700 rounded-lg px-3 py-2"><b>Rejected:</b> {q.rejection_reason}</p>}
           {q.status === 'more_info_requested' && <p className="text-sm bg-orange-50 text-orange-700 rounded-lg px-3 py-2"><b>More information needed:</b> {q.more_info_request}</p>}
-          {q.status === 'cancelled' && q.lost_reason && <p className="text-sm bg-red-50 text-red-700 rounded-lg px-3 py-2"><b>Lost:</b> {q.lost_reason}</p>}
+          {q.status === 'cancelled' && (q.lost_reason || q.lost_reason_code) && <p className="text-sm bg-red-50 text-red-700 rounded-lg px-3 py-2"><b>Lost{q.lost_reason_code ? ` — ${lostLabel(q.lost_reason_code)}` : ''}:</b> {q.lost_reason}</p>}
+          {!q.first_contact_at && 'first_contact_at' in q && PRE_VISIT.includes(q.status) && (
+            <div className="text-sm bg-red-50 border border-red-200 text-red-800 rounded-lg px-3 py-2 flex flex-wrap items-center gap-2">
+              <span><b>Not contacted yet</b> — the enquiry came {hoursAgo(q.created_at)} ago. Leads called within the hour are far more likely to buy.</span>
+              <a href={`tel:${q.mobile}`} className="ml-auto px-3 py-1 bg-red-600 text-white rounded-lg text-xs font-semibold">Call {q.mobile}</a>
+              <span className="w-full text-xs text-red-700">After the call, log it under Follow-ups (or plan the site visit). That clears this alert.</span>
+            </div>
+          )}
+          {(q.referrer || q.group) && (
+            <div className="flex flex-wrap gap-2 text-xs">
+              {q.referrer && <span className="px-2.5 py-1 rounded-full bg-violet-100 text-violet-800 font-semibold">🤝 Referred by {q.referrer.customer_name ?? 'a customer'}{q.referrer.job_number ? ` (${q.referrer.job_number})` : ''}: reward due if this becomes a job</span>}
+              {q.group && <span className="px-2.5 py-1 rounded-full bg-teal-100 text-teal-800 font-semibold">🏘 {q.group.name}: {q.group.members} home{q.group.members === 1 ? '' : 's'}
+                {q.group.discount_pct ? ` · group discount ${q.group.discount_pct}% reached` : ''}{q.group.next ? ` · ${q.group.next.homes - q.group.members} more for ${q.group.next.discount_pct}%` : ''}</span>}
+              {q.group && <a className="text-teal-700 hover:underline self-center" target="_blank" rel="noopener noreferrer"
+                href={whatsappLink(q.mobile, `Invite your neighbours to join "${q.group.name}". The more homes join, the bigger the discount for everyone: ${groupLink(q.group.code)}`)}>WhatsApp the group link to the customer</a>}
+            </div>
+          )}
+          {lost.open && (
+            <div className="border border-red-200 bg-red-50/50 rounded-lg p-3 space-y-2">
+              <p className="text-sm font-semibold text-red-800">Why did the customer not go ahead?</p>
+              <div className="flex flex-wrap gap-1.5">
+                {LOST_REASONS.map(r => (
+                  <button key={r.code} type="button" onClick={() => setLost({ ...lost, code: r.code })}
+                    className={`px-2.5 py-1 rounded-full text-xs border ${lost.code === r.code ? 'bg-red-600 text-white border-red-600' : 'bg-white border-slate-200 text-slate-700'}`}>{r.label}</button>
+                ))}
+              </div>
+              <textarea className={INPUT} rows={2} maxLength={1000} value={lost.note} onChange={e => setLost({ ...lost, note: e.target.value })}
+                placeholder="e.g. Chose XYZ Solar at ₹52,000/kW; may revisit after Pongal" />
+              <div className="flex gap-2 justify-end">
+                <button className="px-3 py-1.5 text-xs text-slate-600" onClick={() => setLost({ open: false, code: '', note: '' })}>Cancel</button>
+                <button className="px-3 py-1.5 text-xs bg-red-600 text-white rounded-lg font-semibold disabled:opacity-50" disabled={!!busy} onClick={markLost}>Mark lost</button>
+              </div>
+              <p className="text-[11px] text-slate-500">These reasons feed the lost-deals chart in Sales insights, so the weekly review can fix the top reason.</p>
+            </div>
+          )}
+          {can.submit && q.auto_rule?.enabled && (
+            <p className={`text-xs rounded-lg px-3 py-2 ${q.auto_rule.eligible ? 'bg-green-50 text-green-800' : 'bg-slate-50 text-slate-600'}`}>
+              {q.auto_rule.eligible ? '✓ Inside the CEO’s auto-approval rules: it is approved as soon as it is submitted.'
+                : 'Needs the CEO’s approval: ' + q.auto_rule.reasons.join('; ') + '.'}
+              {q.auto_rule.margin_pct != null && <span className="text-slate-500"> (margin {q.auto_rule.margin_pct}%, discount {q.auto_rule.discount_pct}%)</span>}
+            </p>
+          )}
+          {q.auto_approved && q.approved_at && <p className="text-xs bg-green-50 text-green-800 rounded-lg px-3 py-2">Approved automatically inside the CEO’s rules on {fmtDate(q.approved_at)}.</p>}
           {q.accepted_by_name || q.accepted_note ? (
             <p className="text-sm bg-emerald-50 text-emerald-800 rounded-lg px-3 py-2">
               <b>Customer accepted {q.accepted_via === 'portal' ? 'online' : '(recorded by staff)'}:</b> {q.accepted_by_name ?? ''} {q.accepted_note ? `— “${q.accepted_note}”` : ''} · {fmtDate(q.customer_response_at)}
@@ -312,7 +374,7 @@ Reason (e.g. duplicate, test, wrong customer):`)
 
           <div className="flex flex-wrap gap-2">
             {can.submit && <button className={`${BTN} bg-purple-600 text-white hover:bg-purple-700`} disabled={!!busy}
-              onClick={() => (dirty ? saveEdits(true) : act('submit', {}, 'Submitted for CEO approval'))}>
+              onClick={() => (dirty ? saveEdits(true) : submitForApproval())}>
               {busy === 'submit' ? <Loader2 size={12} className="animate-spin" /> : <Send size={12} />} Submit for CEO approval</button>}
             {can.approve && <button className={`${BTN} bg-green-600 text-white hover:bg-green-700`} disabled={!!busy}
               onClick={() => { const r = window.prompt('Approval note (optional):', ''); if (r !== null) act('approve', { remarks: r }, 'Approved') }}>
@@ -337,7 +399,7 @@ Reason (e.g. duplicate, test, wrong customer):`)
               onClick={() => { if (window.confirm('Revise this quotation? It returns to draft, the customer link stops working and the CEO must approve it again.')) act('revise', {}, 'Revision started') }}>
               <RotateCcw size={12} /> Revise</button>}
             {can.lose && <button className={`${BTN} bg-red-50 text-red-700 hover:bg-red-100`} disabled={!!busy}
-              onClick={() => askAct('lose', 'Why was it lost / declined?', 'Marked lost')}>Mark lost</button>}
+              onClick={() => setLost({ open: true, code: '', note: '' })}>Mark lost</button>}
             {can.reopen && <button className={`${BTN} bg-slate-100 text-slate-700`} disabled={!!busy} onClick={() => act('reopen', {}, 'Reopened')}>Reopen</button>}
             {can.remove && <button className={`${BTN} ml-auto bg-white text-red-600 border border-red-200 hover:bg-red-50`} disabled={!!busy} onClick={removeQuotation}
               title="Delete a wrong, test or duplicate quotation">
@@ -623,6 +685,9 @@ Reason (e.g. duplicate, test, wrong customer):`)
                 </div>
               </div>
             )}
+            {(q.monthly_bill_range || q.pincode) && <div className={`${CARD} p-5 text-sm`}><p className="font-semibold mb-1">From the enquiry form</p>
+              {q.monthly_bill_range && <p className="text-slate-600">Monthly bill: <b>{q.monthly_bill_range}</b></p>}
+              {q.pincode && <p className="text-slate-600">PIN code: <b>{q.pincode}</b></p>}</div>}
             {q.notes && <div className={`${CARD} p-5 text-sm`}><p className="font-semibold mb-1">Customer notes</p><p className="text-slate-600 whitespace-pre-line">{q.notes}</p></div>}
           </div>
         </div>

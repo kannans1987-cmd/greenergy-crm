@@ -6,15 +6,18 @@ import { ArrowLeft, Loader2, Printer, CheckCircle, AlertTriangle } from 'lucide-
 import { createClient } from '@/lib/supabase/client'
 import OngoingJobCardForm from '@/components/staff/OngoingJobCardForm'
 import DeleteProjectButton from '@/components/staff/DeleteProjectButton'
-import { STAGE_STATUS_LABELS, milestoneProgress, inr, todayIso, isManager, REGION_LABELS, type Role } from '@/lib/workflow'
+import CommissioningChecklist from '@/components/staff/CommissioningChecklist'
+import { referralLink, daysBetween } from '@/lib/growth'
+import { STAGE_STATUS_LABELS, milestoneProgress, inr, todayIso, isManager, REGION_LABELS, whatsappLink, type Role } from '@/lib/workflow'
 
 interface Stage { id: string; stage_code: string; stage_name: string; phase: string | null; sort_order: number; status: string
   planned_date: string | null; actual_date: string | null; notes: string | null; is_subsidy: boolean; updated_by_name: string | null; updated_at: string }
-interface Payment { id: string; milestone_name: string; percentage: number | null; amount: number; status: string; paid_date: string | null; payment_mode: string | null; reference_number: string | null }
+interface Payment { id: string; milestone_name: string; percentage: number | null; amount: number; status: string; paid_date: string | null; payment_mode: string | null; reference_number: string | null
+  due_date: string | null; amount_received?: number | null }
 interface Project { id: string; project_number: string; job_number: string | null; name: string; customer_name: string | null; customer_mobile: string | null
   site_address: string | null; capacity_kwp: number | null; project_type: string | null; region: string | null; subsidy_job: boolean; order_value: number | null
   status: string; start_date: string | null; target_commissioning: string | null; notes: string | null; quotation_id: string | null; admin_officer_id: string | null
-  legacy_ref?: string | null; onboarded_at?: string | null }
+  legacy_ref?: string | null; onboarded_at?: string | null; referral_code?: string | null; report_token?: string | null }
 interface Person { id: string; full_name: string; role: Role }
 
 const INPUT = 'border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm w-full bg-white disabled:bg-slate-50 disabled:text-slate-500'
@@ -33,6 +36,10 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
   const [msg, setMsg] = useState<{ t: string; ok: boolean } | null>(null)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [teamIds, setTeamIds] = useState<string[]>([])
+  const [hasAmc, setHasAmc] = useState<boolean | null>(null)
+  const [commissioned, setCommissioned] = useState(false)
+  const [payForm, setPayForm] = useState<{ id: string; amount: string; mode: string; ref: string; date: string } | null>(null)
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -48,6 +55,13 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
     setMe(prof as { id: string; role: Role }); setP(proj as Project | null); setStages((st ?? []) as Stage[])
     setPayments((pay ?? []) as Payment[]); setTeam((jc ?? []) as unknown as typeof team); setStaff((ppl ?? []) as Person[])
     setChanged(new Set()); setLoading(false)
+    const [{ data: pe }, amc] = await Promise.all([
+      supabase.from('project_employees').select('employee_id').eq('project_id', params.id).is('released_date', null),
+      supabase.from('service_contracts').select('id').eq('project_id', params.id).eq('status', 'active').limit(1),
+    ])
+    setTeamIds((pe ?? []).map((x: { employee_id: string }) => x.employee_id))
+    setHasAmc(amc.error ? null : (amc.data ?? []).length > 0)
+    setCommissioned(((st ?? []) as Stage[]).some(x => x.stage_code === 'commissioning' && x.status === 'completed'))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id])
   useEffect(() => { load() }, [load])
@@ -92,12 +106,20 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
     say(officer ? 'Officer appointed' : 'Officer removed'); load()
   }
 
-  async function markPaid(pay: Payment) {
-    const ref = window.prompt(`Payment reference for “${pay.milestone_name}” (UPI / NEFT / cheque no.):`)
-    if (ref === null) return
-    const { error } = await supabase.from('project_payments').update({ status: 'paid', paid_date: today, reference_number: ref || null }).eq('id', pay.id)
-    if (error) return say(error.message, false)
-    say('Payment recorded'); load()
+  const left = (x: Payment) => Number(x.amount) - Number(x.amount_received ?? 0)
+  async function recordPayment() {
+    if (!payForm) return
+    const { data, error } = await supabase.rpc('record_payment', { p_payment: payForm.id, p_amount: Number(payForm.amount), p_mode: payForm.mode,
+      p_ref: payForm.ref, p_date: payForm.date })
+    if (error) {
+      // Before growth_v1.sql: fall back to marking the whole payment paid
+      if (/record_payment|schema cache|Could not find/i.test(error.message)) {
+        const { error: e2 } = await supabase.from('project_payments').update({ status: 'paid', paid_date: payForm.date, reference_number: payForm.ref || null }).eq('id', payForm.id)
+        if (e2) return say(e2.message, false)
+      } else return say(error.message, false)
+    }
+    const d = data as { due?: number } | null
+    say(d && d.due ? `Received. ${inr(d.due)} still due on this payment.` : 'Payment recorded'); setPayForm(null); load()
   }
 
   let phase = ''
@@ -180,16 +202,47 @@ export default function ProjectDetailPage({ params }: { params: { id: string } }
               {saving && <Loader2 size={14} className="animate-spin inline mr-1" />}Save {changed.size ? `(${changed.size})` : ''}</button></div>}
         </div>
 
+        {p.job_number && <CommissioningChecklist projectId={p.id} canWork={canTrack || teamIds.includes(me.id)} isCeo={ceo} isMgr={isManager(me.role)}
+          customerName={p.customer_name} customerMobile={p.customer_mobile} reportToken={p.report_token ?? null} referralCode={p.referral_code ?? null} />}
+
+        {isManager(me.role) && (p.referral_code || (commissioned && hasAmc === false)) && (
+          <div className={`${CARD} p-4 flex flex-wrap items-center gap-3 text-sm print:hidden`}>
+            {commissioned && hasAmc === false && <><span className="font-semibold text-blue-800">No maintenance contract yet.</span>
+              <Link href={`/staff/service?tab=amc&new_amc=${p.id}`} className="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold">Offer an AMC</Link></>}
+            {p.referral_code && <span className="ml-auto text-xs text-slate-600">Referral code <b className="font-mono">{p.referral_code}</b> ·{' '}
+              <button className="text-green-700 hover:underline" onClick={() => { navigator.clipboard?.writeText(referralLink(p.referral_code!)); say('Referral link copied') }}>copy link</button>
+              {p.customer_mobile && <> · <a className="text-green-700 hover:underline" target="_blank" rel="noopener noreferrer" href={whatsappLink(p.customer_mobile, `Dear ${p.customer_name ?? ''}, thank you for choosing Greenergy Solar Solutions! If friends or neighbours ask about solar, please share your personal link: ${referralLink(p.referral_code)}`)}>send to customer</a></>}</span>}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           <div className={CARD}>
-            <div className="px-5 py-4 border-b border-slate-100"><h2 className="font-semibold text-sm">Payment schedule</h2></div>
+            <div className="px-5 py-4 border-b border-slate-100"><h2 className="font-semibold text-sm">Payment schedule</h2>
+              <p className="text-xs text-slate-500">Due dates follow the milestones. Part payments are recorded as they come.</p></div>
             <ul className="divide-y divide-slate-50 text-sm">
               {payments.map(x => (
-                <li key={x.id} className="px-5 py-3 flex items-center gap-3">
-                  <div className="flex-1"><p className="font-medium">{x.milestone_name}</p>
-                    <p className="text-xs text-slate-500">{x.status === 'paid' ? `Paid ${x.paid_date ?? ''}${x.reference_number ? ' · ' + x.reference_number : ''}` : 'Pending'}</p></div>
-                  <b>{inr(x.amount)}</b>
-                  {isManager(me.role) && x.status !== 'paid' && <button onClick={() => markPaid(x)} className="text-xs font-semibold text-green-700 hover:underline print:hidden">Mark paid</button>}
+                <li key={x.id} className="px-5 py-3 space-y-2">
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1"><p className="font-medium">{x.milestone_name}</p>
+                      <p className={`text-xs ${x.status !== 'paid' && x.due_date && x.due_date < today ? 'text-red-600 font-semibold' : 'text-slate-500'}`}>
+                        {x.status === 'paid' ? `Paid ${x.paid_date ?? ''}${x.reference_number ? ' · ' + x.reference_number : ''}`
+                          : `${x.status === 'partial' ? `Part paid ${inr(x.amount_received)} · ${inr(left(x))} due` : 'Pending'}${x.due_date ? ` · due ${x.due_date}${x.due_date < today ? ` (${daysBetween(x.due_date)} days late)` : ''}` : ''}`}</p></div>
+                    <b>{inr(x.amount)}</b>
+                    {isManager(me.role) && x.status !== 'paid' && x.status !== 'waived' && <button onClick={() => setPayForm({ id: x.id, amount: String(Math.round(left(x))), mode: 'upi', ref: '', date: today })} className="text-xs font-semibold text-green-700 hover:underline print:hidden">Record payment</button>}
+                    {isManager(me.role) && x.status !== 'paid' && p.customer_mobile && <a target="_blank" rel="noopener noreferrer" className="text-xs text-slate-600 hover:underline print:hidden"
+                      href={whatsappLink(p.customer_mobile, `Dear ${p.customer_name ?? ''}, a gentle reminder from Greenergy Solar Solutions: ${inr(left(x))} for "${x.milestone_name}" on your solar project ${p.job_number ?? ''} is due${x.due_date ? ' on ' + x.due_date : ''}. Thank you!`)}>Remind</a>}
+                  </div>
+                  {payForm?.id === x.id && (
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end bg-slate-50 rounded-lg p-2 print:hidden">
+                      <label className="text-xs">Amount (₹)<input className={INPUT} type="number" min="1" value={payForm.amount} onChange={e => setPayForm({ ...payForm, amount: e.target.value })} /></label>
+                      <label className="text-xs">Mode<select className={INPUT} value={payForm.mode} onChange={e => setPayForm({ ...payForm, mode: e.target.value })}>
+                        {['upi', 'neft', 'cheque', 'cash', 'subsidy', 'other'].map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}</select></label>
+                      <label className="text-xs">Reference<input className={INPUT} value={payForm.ref} onChange={e => setPayForm({ ...payForm, ref: e.target.value })} placeholder="UTR / cheque no." /></label>
+                      <label className="text-xs">Received on<input className={INPUT} type="date" max={today} value={payForm.date} onChange={e => setPayForm({ ...payForm, date: e.target.value })} /></label>
+                      <div className="flex gap-1"><button className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold" onClick={recordPayment}>Save</button>
+                        <button className="px-2 py-1.5 text-xs text-slate-500" onClick={() => setPayForm(null)}>Cancel</button></div>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

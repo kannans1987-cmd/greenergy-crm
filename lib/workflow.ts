@@ -116,7 +116,7 @@ export function availableActions(q: QuoteForRules, role: Role, uid: string, quot
     temperature:     (staffOk || visitor) && isOpen(s),
     followUp:        (staffOk || visitor) && s !== 'project_created',
     accept:          staffOk && s === 'sent_to_customer',
-    lose:            staffOk && WITH_CUSTOMER.includes(s),
+    lose:            (staffOk && WITH_CUSTOMER.includes(s)) || (isManager(role) && isEditable(s)),   // early: no response, not interested
     revise:          preparer && ['approved', ...WITH_CUSTOMER].includes(s),
     reopen:          isManager(role) && ['cancelled', 'rejected'].includes(s),
     convert:         isManager(role) && ['customer_accepted', 'advance_pending'].includes(s) && !q.project_id,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireStaff, dbError } from '@/lib/staff'
 import { isManager } from '@/lib/workflow'
+import { createAdminClient } from '@/lib/supabase/server'
 
 // Phone / walk-in enquiries logged by the CEO or admin manager (or staff the CEO gave
 // "Quotations: edit & delete"). The database numbers them (GSS-QT-<year>-<n>) like website enquiries.
@@ -45,6 +46,14 @@ export async function POST(req: NextRequest) {
   const temp = b.lead_temperature === 'hot' || b.lead_temperature === 'cold' ? b.lead_temperature : null
   const next = typeof b.next_follow_up_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(b.next_follow_up_date) ? b.next_follow_up_date : null
   const kw = num('required_capacity_kw')
+  // Referral code of an existing customer (growth_v1.sql): links the lead so the reward is tracked
+  let referred: string | null = null
+  const refCode = (str('referral_code', 12) ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+  if (refCode) {
+    const { data: ref, error: refErr } = await createAdminClient().from('projects').select('id').eq('referral_code', refCode).maybeSingle()
+    if (!refErr && !ref) return NextResponse.json({ error: `No customer has the referral code ${refCode}. Check it, or leave it empty.` }, { status: 400 })
+    referred = ref?.id ?? null
+  }
 
   const { data: row, error } = await supabase.from('quotation_requests').insert({
     customer_name, mobile,
@@ -59,6 +68,7 @@ export async function POST(req: NextRequest) {
     site_visit_required: b.site_visit_required !== false,
     assigned_engineer_id: engineer, assigned_sales_id: id('assigned_sales_id'), follow_up_manager_id: id('follow_up_manager_id'),
     ...(visitAt ? { site_visit_at: visitAt } : {}),
+    ...(referred ? { referred_by_project: referred } : {}),
     status: visitAt && engineer ? 'site_visit_scheduled' : 'new',
   }).select('id, quotation_number, status').single()
   if (error) return dbError(error)

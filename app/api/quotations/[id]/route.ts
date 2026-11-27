@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireStaff, dbError, canManageQuotations } from '@/lib/staff'
 import { createAdminClient } from '@/lib/supabase/server'
-import { buildPrice, isManager } from '@/lib/workflow'
+import { buildPrice, isManager, isEditable as isEditableStatus } from '@/lib/workflow'
 import { loadPricing, toOpts, quotationColumns, saveCosting } from '@/lib/pricing-server'
 import { workout, type Workout } from '@/lib/pricing-engine'
 
@@ -40,8 +40,31 @@ export async function GET(
     ? (await supabase.from('quotation_costings').select('data, catalogue_version, updated_at').eq('quotation_id', id).maybeSingle()).data
     : null
 
+  // Growth extras (growth_v1.sql). Loaded separately so the page still works before that update is run.
+  const q = quotation as Record<string, unknown>
+  let auto_rule: unknown = null, group: unknown = null, referrer: unknown = null
+  try {
+    if (isEditableStatus(String(q.status))) auto_rule = (await supabase.rpc('quotation_auto_approval', { p_quotation: id })).data
+    const admin = createAdminClient()
+    if (q.group_buy_id) {
+      const [{ data: g }, { count }, { data: tiers }] = await Promise.all([
+        admin.from('group_buys').select('name, code, area, status').eq('id', q.group_buy_id as string).maybeSingle(),
+        admin.from('quotation_requests').select('id', { count: 'exact', head: true }).eq('group_buy_id', q.group_buy_id as string).neq('status', 'cancelled').neq('status', 'rejected'),
+        admin.from('business_settings').select('data').eq('key', 'group_buy').maybeSingle(),
+      ])
+      const list = ((tiers?.data as { tiers?: { homes: number; discount_pct: number }[] } | null)?.tiers ?? []).sort((a, b) => a.homes - b.homes)
+      const reached = list.filter(t => (count ?? 0) >= t.homes).pop()
+      const next = list.find(t => (count ?? 0) < t.homes)
+      group = g ? { ...g, members: count ?? 0, discount_pct: reached?.discount_pct ?? 0, next } : null
+    }
+    if (q.referred_by_project) {
+      referrer = (await admin.from('projects').select('customer_name, job_number, referral_code').eq('id', q.referred_by_project as string).maybeSingle()).data
+    }
+  } catch { /* growth update not run yet */ }
+
   return NextResponse.json({
     ...quotation,
+    auto_rule, group, referrer,
     costing,
     line_items:     line_items ?? [],
     status_history: status_history ?? [],
@@ -67,7 +90,7 @@ export async function PATCH(
     'customer_name', 'mobile', 'email', 'address', 'city', 'eb_consumer_number', 'sanctioned_load_kw',
     'avg_monthly_units', 'avg_monthly_bill', 'roof_type', 'available_roof_area_sqft', 'current_phase',
     'consumer_type', 'solar_type', 'region', 'panel_type', 'loan_required', 'site_visit_required', 'notes',
-    'admin_remarks', 'priority', 'valid_until', 'source',
+    'admin_remarks', 'priority', 'valid_until', 'source', 'pincode',
     'admin_capacity_kw', 'price_per_kw', 'discount',
     'panel_brand', 'panel_wp', 'inverter_brand', 'battery_qty',
   ]

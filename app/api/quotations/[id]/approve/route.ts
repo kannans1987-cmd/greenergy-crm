@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireStaff, dbError } from '@/lib/staff'
 import { STATUS_LABELS } from '@/lib/workflow'
+import { createAdminClient } from '@/lib/supabase/server'
+import { LOST_REASONS, lostLabel } from '@/lib/growth'
 
 // Stage changes for a quotation. Who may do what is enforced by the database
 // (supabase/workflow_v2.sql); the checks here only give clearer messages.
@@ -97,7 +99,13 @@ export async function POST(
       note = 'Site visit done: ' + remarks + (lat == null ? ' (no GPS)' : '')
       break
     }
-    case 'lose':              updates = { status: 'cancelled', lost_reason: remarks }; note = 'Lost: ' + remarks; break
+    case 'lose': {
+      const code = LOST_REASONS.some(r => r.code === body.code) ? String(body.code) : null
+      if (!code) return NextResponse.json({ error: 'Choose why the customer did not go ahead.' }, { status: 400 })
+      updates = { status: 'cancelled', lost_reason: remarks, lost_reason_code: code }
+      note = 'Lost — ' + lostLabel(code) + ': ' + remarks
+      break
+    }
     case 'revise':            updates = { status: 'drafted' }; note = 'Revision started — needs CEO approval again'; break
     case 'reopen':            updates = { status: 'drafted' }; note = 'Reopened'; break
     default:
@@ -118,6 +126,30 @@ export async function POST(
     changed_by: me.id, changed_by_name: me.full_name,
     remarks: note ?? `Moved to ${STATUS_LABELS[toStatus] ?? toStatus}`,
   })
+
+  // Inside the CEO's auto-approval rules (Business rules)? Then it is approved straight away.
+  // The rule check runs in the database; the approval is written by the server, never by the browser.
+  if ((action === 'submit' || action === 'send_for_approval') && me.role !== 'admin' && toStatus === 'owner_approval_pending') {
+    const admin = createAdminClient()
+    const { data: rule } = await admin.rpc('quotation_auto_approval', { p_quotation: id })
+    if (rule?.eligible) {
+      const { data: done, error: aErr } = await admin.from('quotation_requests')
+        .update({ status: 'approved', approved_by: null, approved_by_name: 'Auto-approved (CEO rules)', approved_at: new Date().toISOString(),
+                  reviewed_at: new Date().toISOString(), auto_approved: true,
+                  admin_remarks: `Auto-approved: margin ${rule.margin_pct}%, discount ${rule.discount_pct}% — inside the CEO's rules` })
+        .eq('id', id).eq('status', 'owner_approval_pending').select().maybeSingle()
+      if (!aErr && done) {
+        await admin.from('quotation_status_history').insert({ quotation_id: id, from_status: 'owner_approval_pending', to_status: 'approved',
+          changed_by: null, changed_by_name: 'CRM (auto-approval)', remarks: `Inside the CEO's rules (margin ${rule.margin_pct}%, discount ${rule.discount_pct}%)` })
+        const { data: ceos } = await admin.from('profiles').select('id').eq('role', 'admin').eq('status', 'active')
+        if (ceos?.length) await admin.from('notifications').insert(ceos.map((c: { id: string }) => ({ user_id: c.id, type: 'quotation',
+          title: 'Auto-approved within your rules', message: `${done.customer_name} · ${done.quotation_number} · margin ${rule.margin_pct}%`,
+          link: `/staff/quotations/${id}` })))
+        return NextResponse.json({ ...done, auto_approved: true })
+      }
+    }
+    return NextResponse.json({ ...(row ?? {}), auto_approved: false, auto_reasons: rule?.enabled ? rule.reasons : undefined })
+  }
 
   return NextResponse.json(row ?? { ok: true })
 }

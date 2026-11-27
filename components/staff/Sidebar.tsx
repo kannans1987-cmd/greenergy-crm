@@ -7,7 +7,7 @@ import {
   LayoutDashboard, CheckSquare, MapPin, Briefcase,
   FileText, Calendar, Users, BarChart3, Settings,
   LogOut, ChevronLeft, ChevronRight, Bell,
-  ClipboardList, UserCheck
+  ClipboardList, UserCheck, Gauge, TrendingUp, IndianRupee, Wrench, Gift, SlidersHorizontal
 } from 'lucide-react'
 import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
@@ -30,7 +30,13 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Quotations',       href: '/staff/quotations',     icon: ClipboardList },
   { label: 'Projects & Milestones', href: '/staff/projects',  icon: Briefcase },
   { label: 'Job Cards',        href: '/staff/job-cards',      icon: FileText },
+  { label: 'Service & AMC',    href: '/staff/service',        icon: Wrench },
   { label: 'Leave',            href: '/staff/leave',          icon: Calendar },
+  // CEO and admin manager
+  { label: 'Control room',     href: '/staff/control',        icon: Gauge,        managerOnly: true },
+  { label: 'Sales insights',   href: '/staff/insights',       icon: TrendingUp,   managerOnly: true },
+  { label: 'Money & subsidy',  href: '/staff/money',          icon: IndianRupee,  managerOnly: true },
+  { label: 'Referrals & groups', href: '/staff/growth',       icon: Gift,         managerOnly: true },
   // Manager/Admin extras
   { label: 'Admin Dashboard',  href: '/staff/admin',          icon: BarChart3,    adminOnly: true },
   { label: 'User Management',  href: '/staff/admin/users',    icon: UserCheck,    adminOnly: true },
@@ -38,6 +44,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Price List',       href: '/staff/price-list',              icon: Settings,      priceEditors: true },
   { label: 'Pricing Settings', href: '/staff/admin/pricing',           icon: Settings,      adminOnly: true },
   { label: 'Reports',          href: '/staff/admin/reports',           icon: BarChart3,     adminOnly: true },
+  { label: 'Business rules',   href: '/staff/admin/rules',             icon: SlidersHorizontal, adminOnly: true },
 ]
 
 export default function Sidebar() {
@@ -73,7 +80,7 @@ export default function Sidebar() {
   })
 
   const isActive = (href: string) =>
-    pathname === href || (href !== '/staff/dashboard' && pathname.startsWith(href))
+    pathname === href || (href !== '/staff/dashboard' && href !== '/staff/admin' && pathname.startsWith(href + '/'))
 
   const sidebarContent = (
     <div className={`flex flex-col h-full bg-slate-900 text-white transition-all duration-300 ${collapsed ? 'w-16' : 'w-64'}`}>

@@ -20,6 +20,7 @@ interface Profile {
   date_of_joining: string | null
   created_at: string
   avatar_url: string | null
+  super_admin?: boolean
 }
 
 export default function ProfilePage() {
@@ -46,7 +47,7 @@ export default function ProfilePage() {
       if (!user) return
       const { data } = await supabase
         .from('profiles')
-        .select('id,full_name,email,phone,designation,department,role,status,date_of_joining,created_at,avatar_url')
+        .select('*')
         .eq('id', user.id).single()
       if (data) {
         setProfile(data as Profile)
@@ -173,7 +174,7 @@ export default function ProfilePage() {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <InfoRow icon={User}     label="Full Name"   value={profile.full_name} />
-              <InfoRow icon={Shield}   label="Role"        value={roleLabel[profile.role] ?? profile.role} />
+              <InfoRow icon={Shield}   label="Role"        value={profile.role === 'admin' && profile.super_admin ? 'Super Admin' : profile.role === 'admin' ? 'CEO' : roleLabel[profile.role] ?? profile.role} />
               <InfoRow icon={Briefcase}label="Department"  value={profile.department ?? '—'} />
               <InfoRow icon={Briefcase}label="Designation" value={profile.designation ?? '—'} />
               {profile.date_of_joining && (

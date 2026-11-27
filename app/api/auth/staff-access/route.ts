@@ -8,15 +8,19 @@ export async function POST(req: NextRequest) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).single()
+  const { data: me } = await supabase.from('profiles').select('*').eq('id', user.id).single()
   if (me?.role !== 'admin') return NextResponse.json({ error: 'Only the CEO can do this.' }, { status: 403 })
 
   const { user_id, new_email } = await req.json().catch(() => ({}))
   if (typeof user_id !== 'string' || !user_id) return NextResponse.json({ error: 'user_id is required' }, { status: 400 })
 
   const admin = createAdminClient()
-  const { data: profile } = await admin.from('profiles').select('id,email,full_name').eq('id', user_id).single()
+  const { data: profile } = await admin.from('profiles').select('*').eq('id', user_id).single()
   if (!profile) return NextResponse.json({ error: 'Staff member not found.' }, { status: 404 })
+  // A Super Admin cannot take over the CEO's (or another Super Admin's) login
+  if (me.super_admin === true && profile.role === 'admin' && profile.id !== user.id) {
+    return NextResponse.json({ error: `Only the CEO can change the login of ${profile.super_admin ? 'a Super Admin' : 'the CEO'}.` }, { status: 403 })
+  }
 
   let email: string = profile.email
   if (typeof new_email === 'string' && new_email.trim() && new_email.trim().toLowerCase() !== email.toLowerCase()) {

@@ -28,6 +28,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `staff_photos_v1_test.sql` checks staff photos: each person sets their own, the CEO sets anyone's, nobody uploads into or deletes from someone else's folder, and the photo link must be the person's own file in the staff-photos bucket; it ends with `ALL STAFF PHOTO CHECKS PASSED`.
 
+`super_admin_v1_test.sql` checks the Super Admin: CEO powers, but cannot change / deactivate / delete the CEO, cannot make anyone CEO or Super Admin, cannot change their own role; every change (and every server action in the audit log) is recorded for the CEO with before / after, the CEO gets one grouped notification, only the CEO reads the record and marks it reviewed, nobody can edit or delete it; it ends with `ALL SUPER ADMIN CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

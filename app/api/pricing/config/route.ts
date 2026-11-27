@@ -52,6 +52,9 @@ export async function PUT(req: NextRequest) {
       updated_by_name: me.full_name, updated_at: new Date().toISOString() })
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     await admin.from('pricing_history').insert({ key: u.key, version: next, data: u.data, note, changed_by: me.id, changed_by_name: me.full_name })
+    // Audit log (and, for a Super Admin, the CEO's "Super Admin activity")
+    await admin.from('audit_log').insert({ action_by: me.id, action_type: 'pricing_updated', target_entity: 'pricing_config', target_id: u.key,
+      description: `${u.key === 'catalogue' ? 'Supplier price list' : 'Cost model / margin'} updated to version ${next}${note ? ': ' + note : ''}.` })
   }
   return NextResponse.json({ ok: true })
 }

@@ -20,11 +20,12 @@ interface Employee {
   quotation_view?: boolean
   allocation_level?: 'senior' | 'junior' | null
   avatar_url?: string | null
+  super_admin?: boolean
 }
 type Tab = 'pending' | 'employees'
 const ROLE_LABEL: Record<string, string> = {
   employee: 'Staff (sales / field)', jr_admin: 'Jr Admin Manager', sr_admin: 'Sr Admin Manager',
-  task_manager: 'Admin manager (full access)', admin: 'CEO (admin)',
+  task_manager: 'Admin manager (full access)', super_admin: 'Super Admin (all CEO powers)', admin: 'CEO (admin)',
 }
 // What each role means, shown before the change is confirmed
 const ROLE_MEANS: Record<string, string> = {
@@ -32,11 +33,13 @@ const ROLE_MEANS: Record<string, string> = {
   jr_admin: 'Allocates work (tasks, quotation people, service jobs) to anyone except a Sr Admin Manager. Sees all quotations but not supplier cost or margin; changes to a quotation go to you for approval.',
   sr_admin: 'Allocates work to anyone, and gives the first-level approval of leave (you give the final approval). Sees all quotations but not supplier cost or margin; changes to a quotation go to you for approval.',
   task_manager: 'Full access: sees supplier cost and margin, edits every quotation directly, allocates work to anyone and gives first-level leave approval.',
-  admin: 'A CEO (admin) can see everything, approve quotations, change prices and manage all users.',
+  super_admin: 'Everything the CEO can do: see everything, approve quotations, change prices and margin, manage users. But: cannot change, deactivate or delete the CEO, cannot make anyone CEO or Super Admin, and every change they make is flagged to you (Super Admin activity). Like the CEO, they do not clock in.',
+  admin: 'A CEO (admin) can see everything, approve quotations, change prices and manage all users, including the Super Admin.',
 }
 // The role as picked in the dropdown (Sr / Jr are staff with an allocation level)
-const roleKey = (e: { role: string; allocation_level?: string | null }) =>
-  e.role === 'employee' && e.allocation_level === 'senior' ? 'sr_admin' : e.role === 'employee' && e.allocation_level === 'junior' ? 'jr_admin' : e.role
+const roleKey = (e: { role: string; allocation_level?: string | null; super_admin?: boolean }) =>
+  e.role === 'employee' && e.allocation_level === 'senior' ? 'sr_admin' : e.role === 'employee' && e.allocation_level === 'junior' ? 'jr_admin'
+    : e.role === 'admin' && e.super_admin ? 'super_admin' : e.role
 
 export default function UserManagementPage() {
   const supabase = createClient()
@@ -163,6 +166,10 @@ export default function UserManagementPage() {
     } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
   }
 
+  // Super Admin signed in: the CEO's (and other Super Admins') rows are read only, and CEO / Super Admin cannot be given
+  const meSuper = !!employees.find(e => e.id === meId)?.super_admin
+  const lockedRow = (emp: Employee) => meSuper && emp.role === 'admin' && emp.id !== meId
+
   const handleRoleChange = async (emp: Employee, role: string) => {
     const cur = roleKey(emp)
     if (role === cur) return
@@ -175,7 +182,7 @@ export default function UserManagementPage() {
       const lv = role === 'sr_admin' ? 'senior' as const : role === 'jr_admin' ? 'junior' as const : null
       const title = lv === 'senior' ? 'Sr Admin Manager' : lv === 'junior' ? 'Jr Admin Manager' : null
       setEmployees(prev => prev.map(e => e.id === emp.id ? {
-        ...e, role: lv ? 'employee' : role, allocation_level: lv,
+        ...e, role: lv ? 'employee' : role === 'super_admin' ? 'admin' : role, allocation_level: lv, super_admin: role === 'super_admin',
         designation: title ?? (['Sr Admin Manager', 'Jr Admin Manager'].includes(e.designation ?? '') ? (role === 'task_manager' ? 'Admin Manager' : null) : e.designation),
       } : e))
       showToast(`✅ ${emp.full_name} is now ${ROLE_LABEL[role]}`)
@@ -404,7 +411,7 @@ ${a.link}`
                     <tr key={emp.id} className="hover:bg-slate-50 transition">
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-3">
-                          <label className="relative cursor-pointer shrink-0" title={emp.avatar_url ? `Change the photo of ${emp.full_name}` : `Add a photo of ${emp.full_name}`}>
+                          <label className={`relative shrink-0 ${lockedRow(emp) ? 'pointer-events-none' : 'cursor-pointer'}`} title={emp.avatar_url ? `Change the photo of ${emp.full_name}` : `Add a photo of ${emp.full_name}`}>
                             <Avatar name={emp.full_name} url={emp.avatar_url} size={40} className={photoBusy === emp.id ? 'opacity-40' : ''} />
                             {!emp.avatar_url && <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-white border border-slate-200 text-[10px] leading-none flex items-center justify-center text-slate-600">+</span>}
                             <input type="file" accept="image/*" className="sr-only" disabled={photoBusy === emp.id}
@@ -412,7 +419,8 @@ ${a.link}`
                           </label>
                           <div>
                             <p className="font-semibold text-slate-900 whitespace-nowrap">{emp.full_name}</p>
-                            {emp.avatar_url && <button onClick={() => handleRemovePhoto(emp)} className="text-[11px] text-slate-400 hover:text-red-600">Remove photo</button>}
+                            {emp.role === 'admin' && <p className={`text-[10px] font-semibold ${emp.super_admin ? 'text-indigo-600' : 'text-purple-600'}`}>{emp.super_admin ? 'SUPER ADMIN' : 'CEO'}</p>}
+                            {emp.avatar_url && !lockedRow(emp) && <button onClick={() => handleRemovePhoto(emp)} className="text-[11px] text-slate-400 hover:text-red-600">Remove photo</button>}
                           </div>
                         </div>
                       </td>
@@ -421,14 +429,15 @@ ${a.link}`
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1">
                           <Shield size={12} className={emp.role === 'admin' ? 'text-purple-500' : emp.role === 'task_manager' ? 'text-blue-500' : emp.allocation_level ? 'text-green-600' : 'text-slate-400'} />
-                          <select value={roleKey(emp)} onChange={e => handleRoleChange(emp, e.target.value)} disabled={emp.id === meId} title={ROLE_MEANS[roleKey(emp)]}
+                          <select value={roleKey(emp)} onChange={e => handleRoleChange(emp, e.target.value)} disabled={emp.id === meId || lockedRow(emp)} title={ROLE_MEANS[roleKey(emp)]}
                             aria-label={`Role of ${emp.full_name}`}
                             className="text-xs bg-transparent text-slate-700 border border-slate-200 rounded px-1 py-0.5 focus:outline-none cursor-pointer disabled:cursor-default disabled:border-transparent">
                             <option value="employee">Staff (sales / field)</option>
                             <option value="jr_admin">Jr Admin Manager</option>
                             <option value="sr_admin">Sr Admin Manager</option>
                             <option value="task_manager">Admin manager (full access)</option>
-                            <option value="admin">CEO (admin)</option>
+                            <option value="super_admin" disabled={meSuper}>Super Admin (all CEO powers)</option>
+                            <option value="admin" disabled={meSuper}>CEO (admin)</option>
                           </select>
                         </div>
                       </td>
@@ -469,7 +478,7 @@ ${a.link}`
                         </span>
                       </td>
                       <td className="px-4 py-4">
-                        {emp.id === meId ? <span className="text-xs text-slate-400">You</span> : (
+                        {emp.id === meId ? <span className="text-xs text-slate-400">You</span> : lockedRow(emp) ? <span className="text-xs text-slate-400">Only the CEO can change</span> : (
                         <div className="flex items-center gap-2">
                         <button onClick={() => setAccess({ emp, email: emp.email, busy: false })} title="Correct the login email or send a set-password link"
                           className="flex items-center gap-1 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 transition whitespace-nowrap">

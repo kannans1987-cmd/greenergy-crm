@@ -91,6 +91,8 @@ export default function EmployeeDashboard() {
   const [todayHours,  setTodayHours]  = useState(0)
   const [isCeo,       setIsCeo]       = useState(false)   // the CEO does not clock in
   const [isMgr,       setIsMgr]       = useState(false)
+  const [saOpen,      setSaOpen]      = useState(0)       // CEO: Super Admin changes not yet reviewed
+  const [isSuper,     setIsSuper]     = useState(false)
   const [jobCards,    setJobCards]    = useState<JobCard[]>([])
   const [monthHours,  setMonthHours]  = useState(0)
   const [loading,     setLoading]     = useState(true)
@@ -126,7 +128,12 @@ export default function EmployeeDashboard() {
         const mgr = ['admin', 'task_manager'].includes((prof as { role?: string }).role ?? '')
         setIsMgr(mgr)
         if (mgr) supabase.rpc('run_scheduled_alerts').then(() => {}, () => {})   // due alerts (no-op if sent recently)
-        const p = prof as { role?: string; allocation_level?: string | null }
+        const p = prof as { role?: string; allocation_level?: string | null; super_admin?: boolean }
+        setIsSuper(p.role === 'admin' && !!p.super_admin)
+        if (p.role === 'admin' && !p.super_admin) {
+          supabase.from('super_admin_changes').select('id', { count: 'exact', head: true }).is('reviewed_at', null)
+            .then(({ count, error }) => { if (!error) setSaOpen(count ?? 0) })
+        }
         if (mgr || (p.role === 'employee' && p.allocation_level)) {
           const [{ data: people }, { data: att }, { data: lv }] = await Promise.all([
             supabase.from('profiles').select('*').eq('status', 'active').neq('role', 'admin').order('full_name'),
@@ -189,12 +196,18 @@ export default function EmployeeDashboard() {
           </Link>
           <div className="min-w-0">
             <p className="text-lg font-bold truncate">{profile?.full_name}</p>
-            <p className="text-sm text-white/80 truncate">{isCeo ? 'CEO' : profile?.designation || 'Greenergy team'}</p>
+            <p className="text-sm text-white/80 truncate">{isSuper ? 'Super Admin' : isCeo ? 'CEO' : profile?.designation || 'Greenergy team'}</p>
             {!profile?.avatar_url && (
               <Link href="/staff/profile" className="inline-block mt-2 text-xs font-semibold bg-white/20 hover:bg-white/30 rounded-full px-3 py-1">📷 Add your photo</Link>
             )}
           </div>
         </div>
+
+        {saOpen > 0 && (
+          <Link href="/staff/admin/super-activity" className="block rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-900 hover:bg-indigo-100">
+            🛡️ <b>{saOpen} change{saOpen > 1 ? 's' : ''} by the Super Admin</b> to review → Super Admin activity
+          </Link>
+        )}
 
         {/* Team today (CEO, admin manager, Sr / Jr Admin Manager) */}
         {team.length > 0 && (

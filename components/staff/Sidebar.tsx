@@ -7,7 +7,7 @@ import {
   LayoutDashboard, CheckSquare, MapPin, Briefcase,
   FileText, Calendar, Users, BarChart3, Settings,
   LogOut, ChevronLeft, ChevronRight, Bell,
-  ClipboardList, UserCheck, Gauge, TrendingUp, IndianRupee, Wrench, Gift, SlidersHorizontal
+  ClipboardList, UserCheck, Gauge, TrendingUp, IndianRupee, Wrench, Gift, SlidersHorizontal, ShieldCheck
 } from 'lucide-react'
 import Image from 'next/image'
 import { createClient } from '@/lib/supabase/client'
@@ -23,6 +23,7 @@ interface NavItem {
   adminOnly?: boolean
   managerOnly?: boolean
   priceEditors?: boolean   // CEO, or staff the CEO gave price-list access
+  ceoOnly?: boolean        // the CEO, not a Super Admin (super_admin_v1.sql)
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -47,6 +48,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Pricing Settings', href: '/staff/admin/pricing',           icon: Settings,      adminOnly: true },
   { label: 'Reports',          href: '/staff/admin/reports',           icon: BarChart3,     adminOnly: true },
   { label: 'Business rules',   href: '/staff/admin/rules',             icon: SlidersHorizontal, adminOnly: true },
+  { label: 'Super Admin activity', href: '/staff/admin/super-activity', icon: ShieldCheck,   ceoOnly: true },
 ]
 
 export default function Sidebar() {
@@ -56,13 +58,13 @@ export default function Sidebar() {
 
   const [collapsed,  setCollapsed]  = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [profile,    setProfile]    = useState<{ full_name: string; role: Role; designation?: string; price_access?: string | null; avatar_url?: string | null } | null>(null)
+  const [profile,    setProfile]    = useState<{ full_name: string; role: Role; designation?: string; price_access?: string | null; avatar_url?: string | null; super_admin?: boolean } | null>(null)
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (!user) return
-      supabase.from('profiles').select('full_name,role,designation,price_access,avatar_url').eq('id', user.id).single()
-        .then(({ data }) => { if (data) setProfile(data as { full_name: string; role: Role; designation?: string; price_access?: string | null; avatar_url?: string | null }) })
+      supabase.from('profiles').select('*').eq('id', user.id).single()
+        .then(({ data }) => { if (data) setProfile(data as { full_name: string; role: Role; designation?: string; price_access?: string | null; avatar_url?: string | null; super_admin?: boolean }) })
     })
   }, [])
   useEffect(() => {
@@ -81,6 +83,7 @@ export default function Sidebar() {
 
   const visibleItems = NAV_ITEMS.filter(item => {
     if (item.adminOnly   && role !== 'admin') return false
+    if (item.ceoOnly     && (role !== 'admin' || profile?.super_admin)) return false
     if (item.managerOnly && role === 'employee') return false
     if (item.priceEditors && role !== 'admin' && !profile?.price_access) return false
     return true
@@ -140,7 +143,7 @@ export default function Sidebar() {
             <Avatar name={profile.full_name} url={profile.avatar_url} size={36} />
             <div className="overflow-hidden">
               <p className="text-white text-xs font-semibold truncate">{profile.full_name}</p>
-              <p className="text-slate-400 text-[10px]">{profile.role === 'admin' ? 'CEO' : profile.role === 'task_manager' ? 'Admin manager' : (profile.designation || 'Staff')}</p>
+              <p className="text-slate-400 text-[10px]">{profile.role === 'admin' ? (profile.super_admin ? 'Super Admin' : 'CEO') : profile.role === 'task_manager' ? 'Admin manager' : (profile.designation || 'Staff')}</p>
             </div>
           </Link>
         )}

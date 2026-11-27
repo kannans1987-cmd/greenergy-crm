@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
     .order('created_at', { ascending: false })
 
   // Employees only see quotations assigned to them (unless the CEO gave them quotation access)
-  if (profile?.role === 'employee' && !profile?.quotation_access) {
+  if (profile?.role === 'employee' && !profile?.quotation_access && !profile?.quotation_view) {
     q = q.or(`assigned_sales_id.eq.${user.id},assigned_engineer_id.eq.${user.id},follow_up_manager_id.eq.${user.id}`)
   }
 

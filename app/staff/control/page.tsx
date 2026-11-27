@@ -53,7 +53,7 @@ export default function ControlRoom() {
     if (!isManager(me?.role)) { setLoading(false); return }
     supabase.rpc('run_scheduled_alerts').then(() => {}, () => {})   // alerts also run from here (no-op if run recently)
     const safe = async (p: PromiseLike<{ data: unknown; error: unknown }>) => { const r = await p; return (r.error ? [] : r.data ?? []) as Row[] }
-    const [quotes, stages, pays, tickets, contracts, att, leaves, rewards, commissioned] = await Promise.all([
+    const [quotes, stages, pays, tickets, contracts, att, leaves, rewards, commissioned, changes] = await Promise.all([
       safe(supabase.from('quotation_requests').select('*').not('status', 'in', OPEN_FILTER).order('created_at', { ascending: false }).limit(500)),
       safe(supabase.from('project_stage_history').select('project_id, stage_name, stage_code, planned_date, status, projects!inner(id, job_number, customer_name, status)')
         .in('status', ['pending', 'in_progress', 'blocked']).lt('planned_date', today).not('projects.status', 'in', '(completed,cancelled)').order('planned_date').limit(300)),
@@ -64,8 +64,9 @@ export default function ControlRoom() {
       safe(supabase.from('leaves').select('id, from_date, to_date, type, profiles!leaves_employee_id_fkey(full_name)').eq('status', 'pending')),
       safe(supabase.from('referral_rewards').select('id, amount, created_at').eq('status', 'due')),
       safe(supabase.from('project_stage_history').select('project_id, actual_date, projects!inner(id, job_number, customer_name, customer_mobile, capacity_kwp)').eq('stage_code', 'commissioning').eq('status', 'completed')),
+      safe(supabase.from('quotation_change_requests').select('id, quotation_id, reason, created_at, requester:profiles!quotation_change_requests_requested_by_fkey(full_name), quotation_requests(quotation_number, customer_name)').eq('status', 'pending').order('created_at')),
     ])
-    setD({ quotes, stages, pays, tickets, contracts, att, leaves, rewards, commissioned })
+    setD({ quotes, stages, pays, tickets, contracts, att, leaves, rewards, commissioned, changes })
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -78,6 +79,7 @@ export default function ControlRoom() {
   const hasContact = q.some(x => 'first_contact_at' in x)
   const notCalled = hasContact ? q.filter(x => !x.first_contact_at && ['new', 'sales_review', 'site_details_pending'].includes(x.status) && Date.now() - new Date(x.created_at).getTime() > 3600000) : []
   const waitingCeo = q.filter(x => x.status === 'owner_approval_pending')
+  const changeReqs = d.changes ?? []
   const fuLate = q.filter(x => x.next_follow_up_date && x.next_follow_up_date < today)
   const fuToday = q.filter(x => x.next_follow_up_date === today)
   const sentQuiet = q.filter(x => ['sent_to_customer', 'customer_accepted'].includes(x.status) && (x.follow_up_count ?? 0) === 0 && x.sent_to_customer_at && daysBetween(x.sent_to_customer_at) >= 2)
@@ -132,6 +134,11 @@ export default function ControlRoom() {
             {waitingCeo.slice(0, 8).map(x => <Item key={x.id} href={`/staff/quotations/${x.id}`} main={x.customer_name}
               sub={`${x.quotation_number} · ${x.admin_capacity_kw ?? '?'} kW`} right={inr(x.admin_total_cost)} />)}
           </Section>
+          {changeReqs.length > 0 && (
+          <Section title="Quotation change requests" icon={Hourglass} tone="amber" count={changeReqs.length} empty="">
+            {changeReqs.slice(0, 8).map(x => <Item key={x.id} href={`/staff/quotations/${x.quotation_id}`} main={`${x.quotation_requests?.customer_name ?? 'Quotation'} · ${x.requester?.full_name ?? 'Staff'}`}
+              sub={`${x.quotation_requests?.quotation_number ?? ''} · ${x.reason}`} right={<span className="text-amber-600">{hoursAgo(x.created_at)}</span>} />)}
+          </Section>)}
           <Section title="Follow-ups overdue / due today" icon={Clock} tone="red" count={fuLate.length + fuToday.length} empty="No follow-up is late.">
             {[...fuLate, ...fuToday].sort((a, b) => Number(b.lead_temperature === 'hot') - Number(a.lead_temperature === 'hot')).slice(0, 10).map(x => (
               <Item key={x.id} href={`/staff/quotations/${x.id}`} main={<>{x.lead_temperature === 'hot' && '🔥 '}{x.customer_name} · {STATUS_LABELS[x.status] ?? x.status}</>}

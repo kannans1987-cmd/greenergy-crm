@@ -85,6 +85,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
     : lists.mine.length ? 'mine' : 'followups'
   const term = (searchParams.q ?? '').trim().toLowerCase()
   const delegate = !!(me as { quotation_access?: boolean } | null)?.quotation_access
+  const viewer = !!(me as { quotation_view?: boolean } | null)?.quotation_view
   const canHeat = (r: Row) => isOpen(r.status) && (isMgr || delegate || [r.assigned_sales_id, r.assigned_engineer_id, r.follow_up_manager_id].includes(uid))
   const rows = lists[view].filter(r => !term || [r.quotation_number, r.customer_name, r.mobile, r.city, r.job_number]
     .some(x => String(x ?? '').toLowerCase().includes(term)))
@@ -99,7 +100,7 @@ export default async function QuotationsPage({ searchParams }: { searchParams: {
             <input name="q" defaultValue={searchParams.q ?? ''} placeholder="Search name, mobile, number, town…" aria-label="Search quotations"
               className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white" />
           </form>
-          {(isMgr || delegate) && (
+          {(isMgr || delegate || viewer) && (
             <Link href="/staff/quotations/enquiry" className="flex items-center gap-1.5 px-4 py-2 bg-white border border-green-600 text-green-700 text-sm font-semibold rounded-lg hover:bg-green-50">
               <Phone size={15} /> Log phone enquiry
             </Link>

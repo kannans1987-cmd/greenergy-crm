@@ -33,7 +33,8 @@ export default function PhoneEnquiryPage() {
   const [people, setPeople] = useState<Person[]>([])
   const [role, setRole] = useState<Role | null>(null)
   const [delegate, setDelegate] = useState(false)
-  const blocked = role === 'employee' && !delegate
+  const [viewer, setViewer] = useState(false)
+  const blocked = role === 'employee' && !delegate && !viewer
   const [matches, setMatches] = useState<Match[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -42,7 +43,7 @@ export default function PhoneEnquiryPage() {
 
   useEffect(() => {
     fetch('/api/profiles').then(r => r.ok ? r.json() : { profiles: [] }).then(d => setPeople(d.profiles ?? [])).catch(() => {})
-    fetch('/api/profiles?me=1').then(r => r.ok ? r.json() : null).then(d => { setRole(d?.me?.role ?? 'employee'); setDelegate(!!d?.me?.quotation_access) }).catch(() => {})
+    fetch('/api/profiles?me=1').then(r => r.ok ? r.json() : null).then(d => { setRole(d?.me?.role ?? 'employee'); setDelegate(!!d?.me?.quotation_access); setViewer(!!d?.me?.quotation_view) }).catch(() => {})
   }, [])
 
   // Warn when this mobile number already has an enquiry
@@ -85,7 +86,7 @@ export default function PhoneEnquiryPage() {
         <Link href="/staff/quotations" className="inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"><ArrowLeft size={14} /> Quotations</Link>
 
         {blocked && (
-          <p className="text-sm bg-amber-50 text-amber-800 border border-amber-100 rounded-lg p-3">Only the CEO, the admin manager, or staff the CEO gave “Quotations: edit &amp; delete” can log enquiries here.</p>
+          <p className="text-sm bg-amber-50 text-amber-800 border border-amber-100 rounded-lg p-3">Only the CEO, the admin manager, or staff the CEO gave quotation access (User Management → Quotations) can log enquiries here.</p>
         )}
 
         {done ? (

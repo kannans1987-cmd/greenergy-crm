@@ -62,9 +62,15 @@ export async function GET(
     }
   } catch { /* growth update not run yet */ }
 
+  // Change requests (quotation_view_v1.sql); an empty list before that update
+  const { data: change_requests } = await supabase.from('quotation_change_requests')
+    .select('*, requester:profiles!quotation_change_requests_requested_by_fkey(full_name), decider:profiles!quotation_change_requests_decided_by_fkey(full_name)')
+    .eq('quotation_id', id).order('created_at', { ascending: false }).limit(50)
+
   return NextResponse.json({
     ...quotation,
     auto_rule, group, referrer,
+    change_requests: change_requests ?? [],
     costing,
     line_items:     line_items ?? [],
     status_history: status_history ?? [],

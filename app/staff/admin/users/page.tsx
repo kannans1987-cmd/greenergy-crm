@@ -15,6 +15,7 @@ interface Employee {
   designation: string | null; department: string | null; status: string
   price_access: string | null
   quotation_access?: boolean
+  quotation_view?: boolean
 }
 type Tab = 'pending' | 'employees'
 const ROLE_LABEL: Record<string, string> = { employee: 'Staff (sales / field)', task_manager: 'Admin manager', admin: 'CEO (admin)' }
@@ -108,6 +109,15 @@ export default function UserManagementPage() {
       await manage({ user_id: emp.id, action: 'quotation_access', value: on })
       setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, quotation_access: on } : e))
       showToast(on ? `✅ ${emp.full_name} can now edit and delete quotations` : `${emp.full_name} can no longer delete quotations`)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
+  }
+
+  // "Quotations: view all" — see every quotation and log enquiries; changes need the CEO's approval
+  const handleQuotationView = async (emp: Employee, on: boolean) => {
+    try {
+      await manage({ user_id: emp.id, action: 'quotation_view', value: on })
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, quotation_view: on } : e))
+      showToast(on ? `✅ ${emp.full_name} can now see all quotations and log enquiries (changes need your approval)` : `${emp.full_name} now sees only their own quotations`)
     } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
   }
 
@@ -383,6 +393,13 @@ ${a.link}`
                             <input type="checkbox" checked={!!emp.quotation_access} onChange={e => handleQuotationAccess(emp, e.target.checked)}
                               className="accent-green-600" aria-label={`Quotations edit and delete for ${emp.full_name}`} />
                             Edit &amp; delete
+                          </label>
+                        )}
+                        {emp.role === 'employee' && !emp.quotation_access && (
+                          <label className="mt-1 flex items-center gap-1.5 text-xs text-slate-700 cursor-pointer whitespace-nowrap" title="See every quotation and log phone enquiries. Changes are sent to you for approval.">
+                            <input type="checkbox" checked={!!emp.quotation_view} onChange={e => handleQuotationView(emp, e.target.checked)}
+                              className="accent-green-600" aria-label={`Quotations view all for ${emp.full_name}`} />
+                            View all · changes need you
                           </label>
                         )}
                       </td>

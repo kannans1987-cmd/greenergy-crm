@@ -51,6 +51,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, quotation_access: on })
     }
 
+    if (action === 'quotation_view') {
+      const on = value === true
+      const { error } = await admin.from('profiles').update({ quotation_view: on }).eq('id', user_id)
+      if (error) throw new Error(/quotation_view/.test(error.message)
+        ? 'The database needs the quotation update first (supabase/quotation_view_v1.sql).' : error.message)
+      await audit('staff_quotation_view', `${target.full_name} ${on ? 'can now see all quotations and log enquiries (changes need CEO approval)' : 'now sees only own quotations'}.`)
+      return NextResponse.json({ ok: true, quotation_view: on })
+    }
+
     if (action === 'status') {
       if (status !== 'active' && status !== 'inactive') return NextResponse.json({ error: 'Unknown status.' }, { status: 400 })
       const { error } = await admin.from('profiles').update({ status }).eq('id', user_id)

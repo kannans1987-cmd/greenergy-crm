@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireStaff, dbError } from '@/lib/staff'
+import { requireStaff, dbError, canViewAllQuotations } from '@/lib/staff'
 import { isManager } from '@/lib/workflow'
 import { createAdminClient } from '@/lib/supabase/server'
 
-// Phone / walk-in enquiries logged by the CEO or admin manager (or staff the CEO gave
-// "Quotations: edit & delete"). The database numbers them (GSS-QT-<year>-<n>) like website enquiries.
+// Phone / walk-in enquiries logged by the CEO or admin manager, or staff the CEO gave
+// "Quotations: edit & delete" or "Quotations: view all" (admin executives, project manager). The database numbers them (GSS-QT-<year>-<n>) like website enquiries.
 
 const SOURCES = ['phone', 'walk_in', 'referral', 'social_media', 'other'] as const
 const SOURCE_LABEL: Record<string, string> = { phone: 'Phone call', walk_in: 'Walk-in', referral: 'Referral', social_media: 'WhatsApp / social media', other: 'Other' }
@@ -26,9 +26,11 @@ export async function POST(req: NextRequest) {
   const auth = await requireStaff()
   if ('error' in auth) return auth.error
   const { supabase, me } = auth
-  if (!isManager(me.role) && !me.quotation_access) {
-    return NextResponse.json({ error: 'Only the CEO or admin manager can log enquiries here.' }, { status: 403 })
+  if (!canViewAllQuotations(me)) {
+    return NextResponse.json({ error: 'Only the CEO, the admin manager, or staff the CEO gave quotation access can log enquiries here.' }, { status: 403 })
   }
+  // "View all" staff may create the enquiry but not edit quotations, so the server finishes this new row for them
+  const finish = isManager(me.role) || me.quotation_access ? supabase : createAdminClient()
   const b = await req.json().catch(() => ({}))
   const str = (k: string, max = 200) => (typeof b[k] === 'string' && b[k].trim() ? b[k].trim().slice(0, max) : null)
   const num = (k: string) => (b[k] === '' || b[k] == null || !Number.isFinite(Number(b[k])) || Number(b[k]) < 0 ? null : Number(b[k]))
@@ -76,13 +78,13 @@ export async function POST(req: NextRequest) {
   // Hot / cold and the call-back date (new rows always start without hot / cold)
   let warning = ''
   if (temp || next) {
-    const { error: e2 } = await supabase.from('quotation_requests')
+    const { error: e2 } = await finish.from('quotation_requests')
       .update({ ...(temp ? { lead_temperature: temp, lead_temperature_note: str('lead_note', 300) } : {}), ...(next ? { next_follow_up_date: next } : {}) })
       .eq('id', row.id)
     if (e2) warning = 'Saved, but hot / cold could not be set: ' + e2.message
   }
 
-  await supabase.from('quotation_status_history').insert({
+  await finish.from('quotation_status_history').insert({
     quotation_id: row.id, from_status: null, to_status: row.status, changed_by: me.id, changed_by_name: me.full_name,
     remarks: `${SOURCE_LABEL[source]} enquiry logged by ${me.full_name}${temp ? ` · marked ${temp.toUpperCase()}` : ''}`,
   })

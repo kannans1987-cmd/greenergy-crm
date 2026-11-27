@@ -11,11 +11,12 @@ import {
 import {
   STATUS_LABELS, STATUS_COLORS, FLOW, flowStep, availableActions, convertBlocker, buildPrice, inr,
   REGION_LABELS, GST_NOTE, whatsappLink, suggestNextFollowUp, followUpState, isEditable, ROLE_LABELS, type Role,
-  JOBS, PRE_VISIT,
+  JOBS, PRE_VISIT, isManager,
 } from '@/lib/workflow'
 import { getBestFix, mapLink } from '@/lib/geo'
 import CostingTable, { type Costing } from '@/components/staff/CostingTable'
 import HotColdPicker from '@/components/staff/HotColdPicker'
+import QuotationChangeRequests, { type ChangeRequest } from '@/components/staff/QuotationChangeRequests'
 import { LOST_REASONS, lostLabel, hoursAgo, groupLink } from '@/lib/growth'
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
@@ -58,8 +59,10 @@ interface Q {
   auto_rule?: { eligible: boolean; enabled: boolean; reasons: string[]; margin_pct?: number; discount_pct?: number } | null
   group?: { name: string; code: string; area: string | null; members: number; discount_pct: number; next?: { homes: number; discount_pct: number } } | null
   referrer?: { customer_name: string | null; job_number: string | null; referral_code: string | null } | null
-  me: { id: string; full_name: string; role: Role; phone: string | null; quotation_access?: boolean }
+  me: { id: string; full_name: string; role: Role; phone: string | null; quotation_access?: boolean; quotation_view?: boolean }
+  change_requests?: ChangeRequest[]
 }
+
 
 // ─── STYLE HELPERS ───────────────────────────────────────────────────────────
 
@@ -407,6 +410,11 @@ Reason (e.g. duplicate, test, wrong customer):`)
           </div>
         </div>
 
+        {/* "View all" staff ask the CEO for changes; the CEO approves or rejects here */}
+        <QuotationChangeRequests quotationId={q.id} current={q as unknown as Record<string, unknown>} requests={q.change_requests ?? []}
+          meId={me.id} isCeo={me.role === 'admin'} notify={show} onDone={load}
+          canRequest={!!me.quotation_view && !can.edit && !isManager(me.role) && !me.quotation_access && q.status !== 'project_created'} />
+
         <div className="flex flex-col lg:flex-row gap-5">
           {/* LEFT */}
           <div className="flex-1 min-w-0 space-y-5">
@@ -463,7 +471,7 @@ Reason (e.g. duplicate, test, wrong customer):`)
             {/* Customer & system (editable while a draft) */}
             <div className={CARD}>
               <div className={CARD_HDR}><User size={16} className="text-green-600" /><h3 className="font-semibold text-sm">Customer &amp; system</h3>
-                {!can.edit && <span className="ml-auto text-xs text-slate-400">{isEditable(q.status) ? 'Read only for you' : 'Locked after CEO approval — use Revise to change'}</span>}</div>
+                {!can.edit && <span className="ml-auto text-xs text-slate-400">{me.quotation_view && !isManager(me.role) && !me.quotation_access ? 'View only · use “Request a change” above' : isEditable(q.status) ? 'Read only for you' : 'Locked after CEO approval — use Revise to change'}</span>}</div>
               <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Field label="Customer name"><input className={INPUT} disabled={!can.edit} value={form.customer_name} onChange={e => set('customer_name', e.target.value)} /></Field>
                 <Field label="Mobile"><input className={INPUT} disabled={!can.edit} value={form.mobile} onChange={e => set('mobile', e.target.value)} inputMode="tel" /></Field>

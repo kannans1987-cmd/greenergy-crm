@@ -10,10 +10,12 @@ import { createClient, createAdminClient } from '@/lib/supabase/server'
 
 const ROLES = ['employee', 'task_manager', 'admin', 'super_admin'] as const
 // Picked in the Role column; stored as role 'employee' + allocation_level (allocation_levels_v1.sql)
-const LEVEL_ROLES: Record<string, { level: 'senior' | 'junior'; title: string }> = {
+const LEVEL_ROLES: Record<string, { level: 'senior' | 'junior' | 'project'; title: string }> = {
   sr_admin: { level: 'senior', title: 'Sr Admin Manager' },
   jr_admin: { level: 'junior', title: 'Jr Admin Manager' },
+  project_mgr: { level: 'project', title: 'Project Manager' },   // project_manager_v1.sql
 }
+const LEVEL_NAME: Record<string, string> = { senior: 'Sr Admin Manager', junior: 'Jr Admin Manager', project: 'Project Manager' }
 const BLOCK = '876000h' // ~100 years
 type Admin = ReturnType<typeof createAdminClient>
 
@@ -51,7 +53,7 @@ export async function POST(req: NextRequest) {
     if (action === 'role') {
       const lvl = LEVEL_ROLES[role as string]
       if (!lvl && !ROLES.includes(role)) return NextResponse.json({ error: 'Unknown role.' }, { status: 400 })
-      const before = target.role === 'employee' && target.allocation_level ? (target.allocation_level === 'senior' ? 'Sr Admin Manager' : 'Jr Admin Manager')
+      const before = target.role === 'employee' && target.allocation_level ? (LEVEL_NAME[target.allocation_level] ?? target.allocation_level)
         : target.role === 'admin' && target.super_admin ? 'Super Admin' : target.role
       // A Sr / Jr title only belongs with that role: clear it when the role changes to something else
       const oldTitle = ['Sr Admin Manager', 'Jr Admin Manager'].includes(target.designation ?? '')
@@ -62,9 +64,19 @@ export async function POST(req: NextRequest) {
         ? { role: 'employee', allocation_level: lvl.level, designation: lvl.title, ...sa }
         : { role: role === 'super_admin' ? 'admin' : role, ...sa, ...('allocation_level' in target ? { allocation_level: null } : {}), ...(oldTitle ? { designation: role === 'task_manager' ? 'Admin Manager' : null } : {}) }
       const { error } = await admin.from('profiles').update(updates).eq('id', user_id)
-      if (error) throw new Error(/allocation_level/.test(error.message) ? 'The database needs the allocation update first (supabase/allocation_levels_v1.sql).' : error.message)
+      if (error) throw new Error(/allocation_level/.test(error.message)
+        ? (lvl?.level === 'project' ? 'The database needs the Project Manager update first (supabase/project_manager_v1.sql).' : 'The database needs the allocation update first (supabase/allocation_levels_v1.sql).')
+        : error.message)
       await audit('staff_role_changed', `Role of ${target.full_name} changed from ${before} to ${lvl ? lvl.title : role === 'super_admin' ? 'Super Admin' : role}.`)
       return NextResponse.json({ ok: true, role: updates.role, allocation_level: lvl?.level ?? null, super_admin: role === 'super_admin' })
+    }
+
+    if (action === 'designation') {
+      const d = typeof value === 'string' ? value.trim().slice(0, 60) : ''
+      const { error } = await admin.from('profiles').update({ designation: d || null }).eq('id', user_id)
+      if (error) throw new Error(error.message)
+      await audit('staff_designation', `Designation of ${target.full_name} changed from ${target.designation ?? '—'} to ${d || '—'}.`)
+      return NextResponse.json({ ok: true, designation: d || null })
     }
 
     if (action === 'quotation_access') {

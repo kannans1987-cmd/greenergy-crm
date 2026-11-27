@@ -294,7 +294,7 @@ Reason (e.g. duplicate, test, wrong customer):`)
   const mgrMsg = `Follow-up: quotation ${q.quotation_number} for ${q.customer_name} (${q.mobile}), ${kw ?? ''} kW, ${inr(total)}. ${typeof window !== 'undefined' ? window.location.href : ''}`
   // Admin managers first in the lists (the usual follow-up people), then everyone else
   const people = [...staff].sort((a, b) => Number(b.role === 'task_manager' || !!b.allocation_level) - Number(a.role === 'task_manager' || !!a.allocation_level) || a.full_name.localeCompare(b.full_name))
-  const givable = new Set(allocatable(people, me.role, me.allocation_level).map(p => p.id))
+  const givable = new Set(allocatable(people, me.role, me.allocation_level, me.id).map(p => p.id))
   const personOf: Record<string, Person | null> = { assigned_engineer_id: q.assigned_engineer, assigned_sales_id: q.assigned_sales, follow_up_manager_id: q.follow_up_manager }
   const workMsg = (job: string) => `Hi, you have been given work in the Greenergy CRM: ${job} for ${q.customer_name} (${q.mobile}${q.city ? ', ' + q.city : ''}), ${q.quotation_number}${job.startsWith('Site') && q.site_visit_at ? ', visit on ' + fmtWhen(q.site_visit_at) : ''}. ${typeof window !== 'undefined' ? window.location.href : ''}`
 

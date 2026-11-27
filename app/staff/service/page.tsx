@@ -54,7 +54,7 @@ function ServicePage() {
     ])
     setMissing(!!t.error && /service_tickets|schema cache/i.test(t.error.message))
     setTickets(t.data ?? []); setContracts(c.data ?? []); setProjects(p.data ?? [])
-    setStaff(allocatable(((s.profiles ?? []) as (Row & { id: string })[]).filter(x => x.role !== 'admin'), prof?.role, prof?.allocation_level))
+    setStaff(allocatable(((s.profiles ?? []) as (Row & { id: string })[]).filter(x => x.role !== 'admin'), prof?.role, prof?.allocation_level, user.id))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => { load() }, [load])

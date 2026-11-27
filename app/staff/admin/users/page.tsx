@@ -18,18 +18,19 @@ interface Employee {
   price_access: string | null
   quotation_access?: boolean
   quotation_view?: boolean
-  allocation_level?: 'senior' | 'junior' | null
+  allocation_level?: 'senior' | 'junior' | 'project' | null
   avatar_url?: string | null
   super_admin?: boolean
 }
 type Tab = 'pending' | 'employees'
 const ROLE_LABEL: Record<string, string> = {
-  employee: 'Staff (sales / field)', jr_admin: 'Jr Admin Manager', sr_admin: 'Sr Admin Manager',
+  employee: 'Staff (sales / field)', project_mgr: 'Project Manager', jr_admin: 'Jr Admin Manager', sr_admin: 'Sr Admin Manager',
   task_manager: 'Admin manager (full access)', super_admin: 'Super Admin (all CEO powers)', admin: 'CEO (admin)',
 }
 // What each role means, shown before the change is confirmed
 const ROLE_MEANS: Record<string, string> = {
   employee: 'Works on the tasks, quotations and jobs given to them.',
+  project_mgr: 'Allocates work (tasks, site visits, service jobs) to Solar Technicians, Helpers and Jr Admin Managers, and keeps work for themselves. Cannot give work to a Sr Admin Manager or to other staff. Sees all quotations (not supplier cost or margin) and team attendance (view only). Technicians and helpers are found by their designation, so check those in the Designation column.',
   jr_admin: 'Allocates work (tasks, quotation people, service jobs) to anyone except a Sr Admin Manager. Sees all quotations but not supplier cost or margin; changes to a quotation go to you for approval.',
   sr_admin: 'Allocates work to anyone, and gives the first-level approval of leave (you give the final approval). Sees all quotations but not supplier cost or margin; changes to a quotation go to you for approval.',
   task_manager: 'Full access: sees supplier cost and margin, edits every quotation directly, allocates work to anyone and gives first-level leave approval.',
@@ -39,6 +40,7 @@ const ROLE_MEANS: Record<string, string> = {
 // The role as picked in the dropdown (Sr / Jr are staff with an allocation level)
 const roleKey = (e: { role: string; allocation_level?: string | null; super_admin?: boolean }) =>
   e.role === 'employee' && e.allocation_level === 'senior' ? 'sr_admin' : e.role === 'employee' && e.allocation_level === 'junior' ? 'jr_admin'
+    : e.role === 'employee' && e.allocation_level === 'project' ? 'project_mgr'
     : e.role === 'admin' && e.super_admin ? 'super_admin' : e.role
 
 export default function UserManagementPage() {
@@ -170,6 +172,17 @@ export default function UserManagementPage() {
   const meSuper = !!employees.find(e => e.id === meId)?.super_admin
   const lockedRow = (emp: Employee) => meSuper && emp.role === 'admin' && emp.id !== meId
 
+  // Designation: shown everywhere; "Solar Technician" / "Helper" make the person part of the Project Manager's crew
+  const handleDesignation = async (emp: Employee) => {
+    const d = window.prompt(`Designation of ${emp.full_name}\n(e.g. Solar Technician, Helper, Sales Executive, Accountant)`, emp.designation ?? '')
+    if (d === null || d.trim() === (emp.designation ?? '')) return
+    try {
+      const data = await manage({ user_id: emp.id, action: 'designation', value: d })
+      setEmployees(prev => prev.map(e => e.id === emp.id ? { ...e, designation: data.designation ?? null } : e))
+      showToast(`✅ ${emp.full_name}: ${data.designation ?? 'no designation'}`)
+    } catch (err: unknown) { showToast(`❌ ${err instanceof Error ? err.message : 'Failed'}`) }
+  }
+
   const handleRoleChange = async (emp: Employee, role: string) => {
     const cur = roleKey(emp)
     if (role === cur) return
@@ -179,8 +192,8 @@ export default function UserManagementPage() {
     }
     try {
       await manage({ user_id: emp.id, action: 'role', role })
-      const lv = role === 'sr_admin' ? 'senior' as const : role === 'jr_admin' ? 'junior' as const : null
-      const title = lv === 'senior' ? 'Sr Admin Manager' : lv === 'junior' ? 'Jr Admin Manager' : null
+      const lv = role === 'sr_admin' ? 'senior' as const : role === 'jr_admin' ? 'junior' as const : role === 'project_mgr' ? 'project' as const : null
+      const title = lv === 'senior' ? 'Sr Admin Manager' : lv === 'junior' ? 'Jr Admin Manager' : lv === 'project' ? 'Project Manager' : null
       setEmployees(prev => prev.map(e => e.id === emp.id ? {
         ...e, role: lv ? 'employee' : role === 'super_admin' ? 'admin' : role, allocation_level: lv, super_admin: role === 'super_admin',
         designation: title ?? (['Sr Admin Manager', 'Jr Admin Manager'].includes(e.designation ?? '') ? (role === 'task_manager' ? 'Admin Manager' : null) : e.designation),
@@ -425,7 +438,12 @@ ${a.link}`
                         </div>
                       </td>
                       <td className="px-4 py-4 text-slate-600">{emp.email}</td>
-                      <td className="px-4 py-4 text-slate-600 whitespace-nowrap">{emp.designation ?? '—'}</td>
+                      <td className="px-4 py-4 text-slate-600 whitespace-nowrap">
+                        {lockedRow(emp) || emp.id === meId ? (emp.designation ?? "—") : (
+                          <button onClick={() => handleDesignation(emp)} title="Change the designation (e.g. Solar Technician, Helper)" className="hover:text-green-700 hover:underline text-left">
+                            {emp.designation ?? <span className="text-slate-400">Add…</span>}
+                          </button>)}
+                      </td>
                       <td className="px-4 py-4">
                         <div className="flex items-center gap-1">
                           <Shield size={12} className={emp.role === 'admin' ? 'text-purple-500' : emp.role === 'task_manager' ? 'text-blue-500' : emp.allocation_level ? 'text-green-600' : 'text-slate-400'} />
@@ -433,6 +451,7 @@ ${a.link}`
                             aria-label={`Role of ${emp.full_name}`}
                             className="text-xs bg-transparent text-slate-700 border border-slate-200 rounded px-1 py-0.5 focus:outline-none cursor-pointer disabled:cursor-default disabled:border-transparent">
                             <option value="employee">Staff (sales / field)</option>
+                            <option value="project_mgr">Project Manager</option>
                             <option value="jr_admin">Jr Admin Manager</option>
                             <option value="sr_admin">Sr Admin Manager</option>
                             <option value="task_manager">Admin manager (full access)</option>
@@ -444,7 +463,10 @@ ${a.link}`
                       <td className="px-4 py-4">
                         <span className="text-xs text-slate-600">{
                           emp.role === 'admin' || emp.role === 'task_manager' || emp.allocation_level === 'senior' ? 'Anyone'
-                          : emp.allocation_level === 'junior' ? 'Anyone except Sr Admin Manager' : '—'}</span>
+                          : emp.allocation_level === 'junior' ? 'Anyone except Sr Admin Manager'
+                          : emp.allocation_level === 'project' ? 'Technicians, helpers, Jr Admin Managers' : '—'}</span>
+                        {emp.role === 'employee' && !emp.allocation_level && /technician|helper/i.test(emp.designation ?? '') && (
+                          <span className="block text-[10px] text-slate-400">Site crew · Project Manager can give work</span>)}
                       </td>
                       <td className="px-4 py-4">
                         {emp.role === 'admin' ? <span className="text-xs text-slate-500">Full (CEO)</span> : (

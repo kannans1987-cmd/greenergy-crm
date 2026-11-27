@@ -240,7 +240,7 @@ export default function TasksPage() {
           fetch('/api/profiles').then(r => r.ok ? r.json() : { profiles: [] }).catch(() => ({ profiles: [] })),
           supabase.from('projects').select('id,name').eq('status', 'in_progress').order('name'),
         ])
-        setEmployees(allocatable((emps.profiles ?? []) as Profile[], role, level))
+        setEmployees(allocatable((emps.profiles ?? []) as Profile[], role, level, user.id))
         if (proj) setProjects(proj as Project[])
       }
     }

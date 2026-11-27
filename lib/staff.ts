@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import type { Role } from '@/lib/workflow'
 
 export type PriceAccess = 'prices' | 'prices_and_margin' | null
-export interface Me { id: string; full_name: string; role: Role; phone: string | null; price_access: PriceAccess; quotation_access: boolean; quotation_view: boolean; allocation_level: 'senior' | 'junior' | null; super_admin: boolean }
+export interface Me { id: string; full_name: string; role: Role; phone: string | null; price_access: PriceAccess; quotation_access: boolean; quotation_view: boolean; allocation_level: 'senior' | 'junior' | 'project' | null; super_admin: boolean }
 
 // Super Admin (super_admin_v1.sql): role 'admin' with every CEO power; cannot touch the CEO; changes flagged to the CEO
 export const isRealCeo = (me: Me) => me.role === 'admin' && !me.super_admin
@@ -29,7 +29,7 @@ export async function requireStaff(): Promise<{ supabase: Awaited<ReturnType<typ
     return { error: NextResponse.json({ error: 'Your staff account is not active.' }, { status: 403 }) }
   }
   return { supabase, me: { id: profile.id, full_name: profile.full_name, role: profile.role as Role, phone: profile.phone, price_access: (profile.price_access ?? null) as PriceAccess, quotation_access: profile.quotation_access === true, quotation_view: profile.quotation_view === true,
-    allocation_level: profile.role === 'employee' && ['senior', 'junior'].includes(profile.allocation_level) ? profile.allocation_level : null,
+    allocation_level: profile.role === 'employee' && ['senior', 'junior', 'project'].includes(profile.allocation_level) ? profile.allocation_level : null,
     super_admin: profile.role === 'admin' && profile.super_admin === true } }
 }
 

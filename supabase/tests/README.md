@@ -30,6 +30,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `super_admin_v1_test.sql` checks the Super Admin: CEO powers, but cannot change / deactivate / delete the CEO, cannot make anyone CEO or Super Admin, cannot change their own role; every change (and every server action in the audit log) is recorded for the CEO with before / after, the CEO gets one grouped notification, only the CEO reads the record and marks it reviewed, nobody can edit or delete it; it ends with `ALL SUPER ADMIN CHECKS PASSED`.
 
+`project_manager_v1_test.sql` checks the Project Manager: gives tasks, service jobs and site visits to Solar Technicians, Helpers (by designation), Jr Admin Managers and themselves, never to a Sr Admin Manager, sales staff or the CEO; sees quotations without costing and team attendance; does not approve leave; it ends with `ALL PROJECT MANAGER CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

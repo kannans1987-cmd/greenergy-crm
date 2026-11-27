@@ -7,12 +7,15 @@ import { ArrowLeft, Loader2, AlertTriangle } from 'lucide-react'
 import Header from '@/components/staff/Header'
 import CostingTable, { type Costing } from '@/components/staff/CostingTable'
 import PriceInput from '@/components/staff/PriceInput'
+import PanelInverterPicker, { type PickerValue, type PickerOptions } from '@/components/staff/PanelInverterPicker'
+import type { PriceMode } from '@/lib/workflow'
 import { buildPrice, inr, REGION_LABELS, GST_NOTE, SUBSIDY_CHECKED, ROLE_LABELS, isManager, type Role } from '@/lib/workflow'
 
 interface Rule { system_type: string; consumer_type: string; dcr_price_per_kw: number; non_dcr_price_per_kw: number }
 interface Person { id: string; full_name: string; role: Role }
 interface Options { available: boolean; quoteMonth?: string | null; panelBrands?: { DCR: string[]; NonDCR: string[] }
-  panelSizes?: { brand: string; dcr: boolean; wp: number }[]; inverterBrands?: { ongrid: string[]; hybrid: string[] }; batteries?: { id: string; label: string }[] }
+  panelSizes?: { brand: string; dcr: boolean; wp: number }[]; inverterBrands?: { ongrid: string[]; hybrid: string[] }; batteries?: { id: string; label: string }[]
+  inverters?: PickerOptions['inverters'] }
 interface Priced { kwp: number; panels: number; wp: number; panelBrand: string; dcrKwp?: number; mix?: { type: string; brand: string; wp: number; count: number; kwp: number }[]; inverterLabel: string; inverterWarrantyYears: number | null; phase: number
   battery: { label: string; qty: number; kwh: number } | null; pricePerKwPreGst: number; warnings: string[]; type: string; priceListMonth: string | null
   money: ReturnType<typeof buildPrice>; costing?: Costing }
@@ -41,6 +44,8 @@ export default function NewQuotationPage() {
     roof_type: 'rcc', current_phase: 'single', source: 'walk_in', priority: 'normal', notes: '',
     panel_brand: '', panel_wp: '', inverter_brand: '', battery_qty: '1',
     dcr_kw: '', panel_brand_nondcr: '', inverter_phase: '',
+    dcr_panel_qty: '', nondcr_panel_qty: '', panel_wp_nondcr: '', inverter_choice: '', inverter_qty: '',
+    price_mode: 'per_kw', price_entry: '',
     loan_required: false, follow_up_manager_id: '', assigned_sales_id: '',
   })
   const [items, setItems] = useState<{ description: string; quantity: number; unit_price: number }[]>([])
@@ -57,7 +62,7 @@ export default function NewQuotationPage() {
   // Live price from the supplier price list (debounced)
   const extras = items.reduce((n, x) => n + (x.quantity || 1) * (x.unit_price || 0), 0)
   useEffect(() => {
-    if (!useList || !(Number(f.capacity_kw) > 0)) { setPriced(null); return }
+    if (!useList || !(Number(f.capacity_kw) > 0 || Number(f.dcr_panel_qty) > 0 || Number(f.nondcr_panel_qty) > 0)) { setPriced(null); return }
     const t = setTimeout(async () => {
       setPricing(true); setPriceErr('')
       try {
@@ -65,14 +70,17 @@ export default function NewQuotationPage() {
           kw: Number(f.capacity_kw), consumer_type: f.consumer_type, solar_type: f.solar_type, panel_type: f.panel_type, roof_type: f.roof_type,
           panel_brand: f.panel_brand || null, panel_wp: Number(f.panel_wp) || null, inverter_brand: f.inverter_brand || null,
           battery_qty: Number(f.battery_qty) || 1, region: f.region, discount: Number(f.discount) || 0, line_items: items,
-          dcr_kw: Number(f.dcr_kw) || null, panel_brand_nondcr: f.panel_brand_nondcr || null, inverter_phase: f.inverter_phase || null }) })
+          panel_brand_nondcr: f.panel_type === 'Mixed' ? f.panel_brand_nondcr || null : null, inverter_phase: f.inverter_phase || null,
+          dcr_panel_qty: f.panel_type !== 'NonDCR' ? Number(f.dcr_panel_qty) || null : null, nondcr_panel_qty: f.panel_type !== 'DCR' ? Number(f.nondcr_panel_qty) || null : null,
+          panel_wp_nondcr: f.panel_type === 'Mixed' ? Number(f.panel_wp_nondcr) || null : null,
+          inverter_choice: f.inverter_choice || null, inverter_qty: Number(f.inverter_qty) || null }) })
         const d = await r.json()
         if (!r.ok) { setPriced(null); setPriceErr(d.error ?? 'Could not price this system.') } else setPriced(d)
       } catch { setPriceErr('Could not reach the price list.') }
       finally { setPricing(false) }
     }, 350)
     return () => clearTimeout(t)
-  }, [useList, f.capacity_kw, f.consumer_type, f.solar_type, f.panel_type, f.roof_type, f.panel_brand, f.panel_wp, f.inverter_brand, f.battery_qty, f.region, f.discount, items, f.dcr_kw, f.panel_brand_nondcr, f.inverter_phase])
+  }, [useList, f.capacity_kw, f.consumer_type, f.solar_type, f.panel_type, f.roof_type, f.panel_brand, f.panel_wp, f.inverter_brand, f.battery_qty, f.region, f.discount, items, f.panel_brand_nondcr, f.inverter_phase, f.dcr_panel_qty, f.nondcr_panel_qty, f.panel_wp_nondcr, f.inverter_choice, f.inverter_qty])
 
   // Fallback ₹/kW from Pricing Settings when the price list is not loaded (or for off-grid / pumps)
   const suggested = useMemo(() => {
@@ -80,29 +88,32 @@ export default function NewQuotationPage() {
     return r ? (f.panel_type === 'NonDCR' ? r.non_dcr_price_per_kw : r.dcr_price_per_kw) : null
   }, [rules, f.solar_type, f.consumer_type, f.panel_type])
 
-  const override = Number(f.price_per_kw_override) || 0
+  // "Own price": with the price list it replaces the list price; without it, it is the price
+  const ownKey = useList ? 'price_per_kw_override' : 'price_per_kw'
+  const typedIncl = f.price_mode !== 'per_kw' && Number(f.price_entry) > 0
+  const override = useList ? (typedIncl ? 0 : Number(f.price_per_kw_override) || 0) : 0
   const kw = useList && priced ? priced.kwp : Number(f.capacity_kw)
   const ppk = override || (useList && priced ? priced.pricePerKwPreGst : Number(f.price_per_kw) || suggested || 0)
-  const p = kw > 0 && ppk > 0 ? buildPrice({ kw, pricePerKw: ppk, extras, discount: Number(f.discount) || 0,
-    region: f.region, consumerType: f.consumer_type, solarType: f.solar_type, panelType: useList && priced ? priced.type : f.panel_type,
-    dcrKw: useList && priced ? priced.dcrKwp ?? null : Number(f.dcr_kw) || null }) : null
+  const priceCtx = { region: f.region, consumerType: f.consumer_type, solarType: f.solar_type, panelType: useList && priced ? priced.type : f.panel_type,
+    dcrKw: useList && priced ? priced.dcrKwp ?? null : Number(f.dcr_kw) || null }
+  const p = kw > 0 && (ppk > 0 || typedIncl) ? buildPrice({ kw, pricePerKw: ppk, extras, discount: Number(f.discount) || 0, ...priceCtx,
+    entryMode: typedIncl ? f.price_mode : null, entryValue: typedIncl ? Number(f.price_entry) : null }) : null
 
-  const type = f.consumer_type !== 'domestic' ? 'NonDCR' : f.panel_type === 'Mixed' ? 'DCR' : f.panel_type
-  const brands = opts?.panelBrands?.[type as 'DCR' | 'NonDCR'] ?? []
-  const sizes = (opts?.panelSizes ?? []).filter(s => s.dcr === (type === 'DCR') && (!f.panel_brand || s.brand === f.panel_brand)).map(s => s.wp)
-  const invBrands = opts?.inverterBrands?.[f.solar_type === 'hybrid' ? 'hybrid' : 'ongrid'] ?? []
 
   async function save() {
     setError('')
     if (!f.customer_name.trim() || !/^[0-9+\-\s]{10,16}$/.test(f.mobile.trim())) return setError('Enter the customer name and a valid mobile number.')
-    if (f.panel_type === 'Mixed' && !(Number(f.dcr_kw) > 0 && Number(f.dcr_kw) < Number(f.capacity_kw))) return setError('For mixed panels, enter the DCR part in kW (less than the total size).')
+    if (f.panel_type === 'Mixed' && f.consumer_type === 'domestic' && !(Number(f.dcr_panel_qty) > 0 && Number(f.nondcr_panel_qty) > 0)) return setError('For mixed panels, enter the number of DCR panels and of Non-DCR panels.')
     if (!p) return setError(useList ? (priceErr || 'Waiting for the price.') : 'Enter the system size and price per kW.')
     setSaving(true)
     try {
       const r = await fetch('/api/quotations/staff', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...f, use_price_list: useList, price_per_kw: ppk, price_per_kw_override: override || null,
+        body: JSON.stringify({ ...f, use_price_list: useList, price_per_kw: p?.pricePerKw ?? ppk, price_per_kw_override: override || null,
           panel_wp: Number(f.panel_wp) || null, battery_qty: Number(f.battery_qty) || null, line_items: items,
-          dcr_kw: f.panel_type === 'Mixed' ? Number(f.dcr_kw) || null : null, inverter_phase: f.inverter_phase || null }) })
+          dcr_kw: null, inverter_phase: f.inverter_phase || null,
+          dcr_panel_qty: f.panel_type !== 'NonDCR' ? f.dcr_panel_qty : '', nondcr_panel_qty: f.panel_type !== 'DCR' ? f.nondcr_panel_qty : '',
+          panel_wp_nondcr: f.panel_type === 'Mixed' ? f.panel_wp_nondcr : '', panel_brand_nondcr: f.panel_type === 'Mixed' ? f.panel_brand_nondcr : '',
+          price_mode: typedIncl ? f.price_mode : 'per_kw', price_entry: typedIncl ? Number(f.price_entry) : null }) })
       const d = await r.json()
       if (!r.ok) throw new Error(d.error ?? 'Could not save.')
       router.push(`/staff/quotations/${d.id}`)
@@ -140,7 +151,9 @@ export default function NewQuotationPage() {
                   {['domestic', 'commercial', 'industrial', 'institution', 'agricultural'].map(x => <option key={x} value={x}>{x[0].toUpperCase() + x.slice(1)}</option>)}</select></Field>
                 <Field label="System type"><select className={INPUT} value={f.solar_type} onChange={e => { set('solar_type', e.target.value); set('inverter_brand', '') }}>
                   {[['ongrid', 'On-grid'], ['hybrid', 'Hybrid (with battery)'], ['offgrid', 'Off-grid'], ['solar_pump', 'Solar pump']].map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
-                <Field label="Required size (kW) *"><input className={INPUT} type="number" min="0.5" step="0.01" value={f.capacity_kw} onChange={e => set('capacity_kw', e.target.value)} /></Field>
+                <Field label={Number(f.dcr_panel_qty) > 0 || Number(f.nondcr_panel_qty) > 0 ? 'Size (kW) — set by the number of panels' : 'Required size (kW) *'}>
+                  <input className={INPUT} type="number" min="0.5" step="0.01" disabled={Number(f.dcr_panel_qty) > 0 || Number(f.nondcr_panel_qty) > 0}
+                    value={priced && (Number(f.dcr_panel_qty) > 0 || Number(f.nondcr_panel_qty) > 0) ? String(priced.kwp) : f.capacity_kw} onChange={e => set('capacity_kw', e.target.value)} /></Field>
                 <Field label="Roof"><select className={INPUT} value={f.roof_type} onChange={e => set('roof_type', e.target.value)}>
                   {[['rcc', 'RCC'], ['sheet', 'Metal sheet / shed'], ['ground_mount', 'Ground mount'], ['other', 'Other']].map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
                 <Field label="Sanctioned load (kW)"><input className={INPUT} type="number" value={f.sanctioned_load_kw} onChange={e => set('sanctioned_load_kw', e.target.value)} /></Field>
@@ -156,36 +169,21 @@ export default function NewQuotationPage() {
               {useList
                 ? <p className="text-xs text-slate-500 mb-3">Priced from the supplier price list{opts?.quoteMonth ? ` (${opts.quoteMonth})` : ''}: panels × ₹/W, inverter, structure, cables, ACDB/DCDB, earthing, installation, then margin and {GST_NOTE}. Leave a choice on “Best value” to let the price list pick.</p>
                 : <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-3">{opts && !opts.available ? 'The supplier price list has not been loaded yet — enter ₹/kW manually.' : 'Off-grid and pump systems are priced manually.'}</p>}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <Field label="Panels"><select className={INPUT} value={f.panel_type} disabled={f.consumer_type !== 'domestic'} onChange={e => { set('panel_type', e.target.value); set('panel_brand', ''); set('panel_wp', '') }}>
-                  <option value="DCR">DCR (subsidy eligible)</option><option value="NonDCR">Non-DCR</option>
-                  <option value="Mixed">Mixed: DCR + Non-DCR</option></select></Field>
-                {f.panel_type === 'Mixed' && f.consumer_type === 'domestic' && (
-                  <Field label="DCR part (kW) — subsidy is on this part"><input className={INPUT} type="number" min="0.5" step="0.01" value={f.dcr_kw} placeholder="e.g. 3"
-                    onChange={e => set('dcr_kw', e.target.value)} /></Field>
-                )}
-                <Field label="Inverter phase"><select className={INPUT} value={f.inverter_phase} onChange={e => set('inverter_phase', e.target.value)}>
-                  <option value="">Automatic (by size)</option><option value="1">Single phase</option><option value="3">Three phase</option></select></Field>
-                {useList && <>
-                  <Field label={f.panel_type === 'Mixed' ? 'DCR panel brand' : 'Panel brand'}><select className={INPUT} value={f.panel_brand} onChange={e => { set('panel_brand', e.target.value); set('panel_wp', '') }}>
-                    <option value="">Best value</option>{brands.map(b => <option key={b} value={b}>{b}</option>)}</select></Field>
-                  <Field label={f.panel_type === 'Mixed' ? 'DCR panel size' : 'Panel size'}><select className={INPUT} value={f.panel_wp} onChange={e => set('panel_wp', e.target.value)}>
-                    <option value="">Best value</option>{Array.from(new Set(sizes)).sort((a, b) => a - b).map(w => <option key={w} value={w}>{w} Wp</option>)}</select></Field>
-                  {f.panel_type === 'Mixed' && <Field label="Non-DCR panel brand"><select className={INPUT} value={f.panel_brand_nondcr} onChange={e => set('panel_brand_nondcr', e.target.value)}>
-                    <option value="">Best value</option>{(opts?.panelBrands?.NonDCR ?? []).map(b => <option key={b} value={b}>{b}</option>)}</select></Field>}
-                  <Field label={f.solar_type === 'hybrid' ? 'Hybrid inverter brand' : 'Inverter brand'}><select className={INPUT} value={f.inverter_brand} onChange={e => set('inverter_brand', e.target.value)}>
-                    <option value="">Preferred / best value</option>{invBrands.map(b => <option key={b} value={b}>{b}</option>)}</select></Field>
-                  {f.solar_type === 'hybrid' && <Field label="Batteries"><input className={INPUT} type="number" min="1" max="20" value={f.battery_qty} onChange={e => set('battery_qty', e.target.value)} /></Field>}
-                </>}
-                {!useList && <div className="sm:col-span-3"><PriceInput label={`Price${suggested ? ` (Pricing Settings: ${inr(suggested)}/kW before GST)` : ''}`} kw={Number(f.capacity_kw) || 0}
-                  ppk={Number(f.price_per_kw) || 0} extras={extras} discount={Number(f.discount) || 0} placeholder={suggested ? String(suggested) : 'Enter the price'}
-                  price={{ kw: Number(f.capacity_kw) || 0, pricePerKw: 0, region: f.region, consumerType: f.consumer_type, solarType: f.solar_type, panelType: f.panel_type, dcrKw: Number(f.dcr_kw) || null }}
-                  onChange={v => set('price_per_kw', v ? String(v) : '')} /></div>}
+              {useList ? (
+                <PanelInverterPicker opts={opts as PickerOptions} v={f as unknown as PickerValue} set={(k, val) => set(k, val)} />
+              ) : (
+                <Field label="Panels"><select className={INPUT} value={f.panel_type} disabled={f.consumer_type !== 'domestic'} onChange={e => set('panel_type', e.target.value)}>
+                  <option value="DCR">DCR (subsidy eligible)</option><option value="NonDCR">Non-DCR</option></select></Field>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+                <div className="sm:col-span-3">
+                  <PriceInput kw={kw || 0} extras={extras} discount={Number(f.discount) || 0} price={priceCtx}
+                    label={useList ? 'Your price instead of the list price (optional — the CEO reviews it)' : `Price${suggested ? ` (Pricing Settings: ${inr(suggested)}/kW before GST)` : ''}`}
+                    placeholder={useList ? 'Empty = list price' : suggested ? String(suggested) : 'Enter the price'}
+                    value={{ ppk: Number(f[ownKey]) || 0, mode: f.price_mode as PriceMode, entry: Number(f.price_entry) || null }}
+                    onChange={v => setF(x => ({ ...x, [ownKey]: v.ppk ? String(v.ppk) : '', price_mode: v.mode, price_entry: v.entry ? String(v.entry) : '' }))} />
+                </div>
                 <Field label="Discount (₹, before GST)"><input className={INPUT} type="number" min="0" value={f.discount} onChange={e => set('discount', e.target.value)} /></Field>
-                {useList && <div className="sm:col-span-3"><PriceInput label="Your price instead of the list price (optional, the CEO reviews it)" kw={priced?.kwp ?? (Number(f.capacity_kw) || 0)}
-                  ppk={Number(f.price_per_kw_override) || 0} extras={extras} discount={Number(f.discount) || 0} placeholder="Leave empty to use the price list"
-                  price={{ kw: priced?.kwp ?? (Number(f.capacity_kw) || 0), pricePerKw: 0, region: f.region, consumerType: f.consumer_type, solarType: f.solar_type, panelType: priced?.type ?? f.panel_type, dcrKw: priced?.dcrKwp ?? null }}
-                  onChange={v => set('price_per_kw_override', v ? String(v) : '')} /></div>}
               </div>
 
               {useList && priced && (
@@ -196,7 +194,7 @@ export default function NewQuotationPage() {
                     : <p><b>{priced.panels} × {priced.panelBrand} {priced.wp} Wp</b> = {priced.kwp} kWp ({priced.type === 'DCR' ? 'DCR' : 'Non-DCR'})</p>}
                   <p>Inverter: <b>{priced.inverterLabel}</b> ({priced.phase}-phase){priced.inverterWarrantyYears ? ` · ${priced.inverterWarrantyYears}-year warranty` : ''}</p>
                   {priced.battery && <p>Battery: <b>{priced.battery.qty} × {priced.battery.label}</b></p>}
-                  <p className="text-slate-500">List price {inr(priced.pricePerKwPreGst)}/kW before GST{override ? ` — overridden to ${inr(override)}/kW` : ''}</p>
+                  <p className="text-slate-500">List price {inr(priced.pricePerKwPreGst)}/kW before GST{typedIncl ? ` — your price: ${inr(p?.total ?? 0)} incl. GST` : override ? ` — your price ${inr(override)}/kW` : ''}</p>
                   {priced.warnings.map((w, i) => <p key={i} className="text-amber-700 flex gap-1"><AlertTriangle size={13} className="shrink-0 mt-0.5" />{w}</p>)}
                 </div>
               )}

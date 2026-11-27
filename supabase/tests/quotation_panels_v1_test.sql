@@ -30,16 +30,25 @@ update quotation_requests set panel_type = 'Mixed', dcr_kw = 3, panel_brand_nond
   where id = 'd1000000-0000-0000-0000-0000000000a1';
 select pg_temp.fails($$update quotation_requests set inverter_phase = '2' where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'phase 2');
 select pg_temp.fails($$update quotation_requests set dcr_kw = 0 where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'DCR part 0 kW');
+update quotation_requests set dcr_panel_qty = 6, nondcr_panel_qty = 6, panel_wp_nondcr = 580, inverter_choice = 't5', inverter_qty = 2,
+  price_mode = 'total_incl', price_entry = 333333 where id = 'd1000000-0000-0000-0000-0000000000a1';
+select pg_temp.fails($$update quotation_requests set inverter_qty = 0 where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'zero inverters');
+select pg_temp.fails($$update quotation_requests set nondcr_panel_qty = -1 where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'negative panels');
+select pg_temp.fails($$update quotation_requests set price_mode = 'cheap' where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'unknown price mode');
 select pg_temp.fails($$update quotation_requests set panel_type = 'Hybrid' where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'unknown panel type');
 commit;
 select pg_temp.ok((select panel_type = 'Mixed' and dcr_kw = 3 and inverter_phase = '3' and jsonb_array_length(panel_mix) = 2
   from quotation_requests where id = 'd1000000-0000-0000-0000-0000000000a1'), 'mixed system saved by the preparer');
+select pg_temp.ok((select dcr_panel_qty = 6 and inverter_qty = 2 and price_mode = 'total_incl' and price_entry = 333333
+  from quotation_requests where id = 'd1000000-0000-0000-0000-0000000000a1'), 'panel numbers, inverter and typed price saved');
 
 -- After approval the mix and phase are locked, like the price
 update quotation_requests set status = 'approved' where id = 'd1000000-0000-0000-0000-0000000000a1';
 begin; set local role authenticated; select pg_temp.act('00000000-0000-0000-0000-0000000d1e02');
 select pg_temp.fails($$update quotation_requests set dcr_kw = 2 where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'DCR part changed after approval');
 select pg_temp.fails($$update quotation_requests set inverter_phase = '1' where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'phase changed after approval');
+select pg_temp.fails($$update quotation_requests set inverter_qty = 1 where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'inverter count changed after approval');
+select pg_temp.fails($$update quotation_requests set price_entry = 300000 where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'typed price changed after approval');
 commit;
 begin; set local role authenticated; select pg_temp.act('00000000-0000-0000-0000-0000000d1e01');
 select pg_temp.fails($$update quotation_requests set panel_mix = null where id = 'd1000000-0000-0000-0000-0000000000a1'$$, 'even the CEO revises instead');

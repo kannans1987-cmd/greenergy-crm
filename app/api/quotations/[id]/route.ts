@@ -3,6 +3,7 @@ import { requireStaff, dbError, canManageQuotations } from '@/lib/staff'
 import { createAdminClient } from '@/lib/supabase/server'
 import { buildPrice, isManager, isEditable as isEditableStatus } from '@/lib/workflow'
 import { loadPricing, toOpts, quotationColumns, saveCosting } from '@/lib/pricing-server'
+const PRICE_MODES_OK = ['per_kw', 'per_kw_incl', 'total_incl']
 import { workout, type Workout } from '@/lib/pricing-engine'
 
 export async function GET(
@@ -100,12 +101,20 @@ export async function PATCH(
     'admin_capacity_kw', 'price_per_kw', 'discount',
     'panel_brand', 'panel_wp', 'inverter_brand', 'battery_qty',
     'dcr_kw', 'panel_brand_nondcr', 'inverter_phase',   // quotation_panels_v1.sql
+    'dcr_panel_qty', 'nondcr_panel_qty', 'panel_wp_nondcr', 'inverter_choice', 'inverter_qty', 'price_mode', 'price_entry',
   ]
   const MANAGER_FIELDS = ['assigned_sales_id', 'assigned_engineer_id', 'follow_up_manager_id']
 
   const updates: Record<string, unknown> = {}
   for (const f of FIELDS) if (f in body) updates[f] = body[f] === '' ? null : body[f]
   if ('inverter_phase' in updates) updates.inverter_phase = ['1', '3'].includes(String(updates.inverter_phase)) ? String(updates.inverter_phase) : null
+  for (const k of ['dcr_panel_qty', 'nondcr_panel_qty', 'panel_wp_nondcr', 'inverter_qty']) if (k in updates) {
+    const n = Math.round(Number(updates[k])); updates[k] = updates[k] != null && Number.isFinite(n) && n > 0 ? n : null
+  }
+  if ('price_mode' in updates) {
+    if (!PRICE_MODES_OK.includes(String(updates.price_mode)) || updates.price_mode === 'per_kw' || !(Number(updates.price_entry) > 0)) { updates.price_mode = null; updates.price_entry = null }
+    else updates.price_entry = Number(updates.price_entry)
+  }
   if ('panel_type' in updates && updates.panel_type !== 'Mixed') {
     // Back to one panel type: clear the mix (only if the quotation_panels_v1.sql columns exist)
     const { data: row } = await supabase.from('quotation_requests').select('*').eq('id', id).maybeSingle()
@@ -133,6 +142,8 @@ export async function PATCH(
       Object.assign(updates, cols)
       const override = Number(body.price_per_kw_override)
       if (override > 0) updates.price_per_kw = override
+      // "Re-price from the price list" takes the list price (a price typed incl. GST is dropped)
+      else if (cur && 'price_mode' in cur) { updates.price_mode = null; updates.price_entry = null }
       listed = { w, cv: p.catalogueVersion, mv: p.modelVersion }
     } catch (e) {
       return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not price this system.' }, { status: 400 })
@@ -140,7 +151,7 @@ export async function PATCH(
   }
 
   // Recalculate the money from size, ₹/kW, extras and discount whenever any of them changes
-  const pricingTouched = !!listed || ['admin_capacity_kw', 'price_per_kw', 'discount', 'region', 'consumer_type', 'solar_type', 'panel_type', 'dcr_kw', 'line_items']
+  const pricingTouched = !!listed || ['admin_capacity_kw', 'price_per_kw', 'discount', 'region', 'consumer_type', 'solar_type', 'panel_type', 'dcr_kw', 'price_mode', 'price_entry', 'line_items']
     .some(f => f in body)
   if (pricingTouched) {
     const { data: cur } = await supabase.from('quotation_requests')
@@ -155,9 +166,12 @@ export async function PATCH(
       extras = (items ?? []).filter(x => x.is_included !== false).reduce((n, x) => n + Number(x.quantity) * Number(x.unit_price), 0)
     }
     const kw = Number(v.admin_capacity_kw), ppk = Number(v.price_per_kw)
-    if (kw > 0 && ppk > 0) {
+    const typedIncl = ['per_kw_incl', 'total_incl'].includes(String(v.price_mode)) && Number(v.price_entry) > 0
+    if (kw > 0 && (ppk > 0 || typedIncl)) {
       const p = buildPrice({ kw, pricePerKw: ppk, extras, discount: Number(v.discount) || 0, region: v.region as string,
-        consumerType: v.consumer_type as string, solarType: v.solar_type as string, panelType: v.panel_type as string, dcrKw: Number(v.dcr_kw) || null })
+        consumerType: v.consumer_type as string, solarType: v.solar_type as string, panelType: v.panel_type as string, dcrKw: Number(v.dcr_kw) || null,
+        entryMode: typedIncl ? String(v.price_mode) : null, entryValue: typedIncl ? Number(v.price_entry) : null })
+      if (typedIncl) updates.price_per_kw = p.pricePerKw
       if (v.panel_type === 'Mixed' && !(Number(v.dcr_kw) > 0 && Number(v.dcr_kw) < kw)) {
         return NextResponse.json({ error: 'For mixed panels, enter the DCR part in kW (less than the total size).' }, { status: 400 })
       }

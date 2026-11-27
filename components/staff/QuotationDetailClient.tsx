@@ -18,6 +18,8 @@ import CostingTable, { type Costing } from '@/components/staff/CostingTable'
 import HotColdPicker from '@/components/staff/HotColdPicker'
 import QuotationChangeRequests, { type ChangeRequest } from '@/components/staff/QuotationChangeRequests'
 import PriceInput from '@/components/staff/PriceInput'
+import PanelInverterPicker, { type PickerValue } from '@/components/staff/PanelInverterPicker'
+import type { PriceMode } from '@/lib/workflow'
 import { LOST_REASONS, lostLabel, hoursAgo, groupLink } from '@/lib/growth'
 
 // ─── TYPES ───────────────────────────────────────────────────────────────────
@@ -133,6 +135,11 @@ export default function QuotationDetailClient({ id }: { id: string }) {
         panel_brand: data.panel_type === 'Mixed' ? (data.panel_mix?.find((m: { type: string }) => m.type === 'DCR')?.brand ?? '') : (data.panel_brand ?? ''),
         inverter_brand: data.inverter_brand ?? '', battery_qty: String(data.battery_qty ?? 1),
         dcr_kw: data.dcr_kw != null ? String(data.dcr_kw) : '', panel_brand_nondcr: data.panel_brand_nondcr ?? '', inverter_phase: data.inverter_phase ?? '',
+        panel_wp: data.panel_type === 'Mixed' ? String(data.panel_mix?.find((m: { type: string }) => m.type === 'DCR')?.wp ?? '') : String(data.panel_wp ?? ''),
+        panel_wp_nondcr: String(data.panel_wp_nondcr ?? data.panel_mix?.find((m: { type: string }) => m.type === 'NonDCR')?.wp ?? ''),
+        dcr_panel_qty: String(data.dcr_panel_qty ?? ''), nondcr_panel_qty: String(data.nondcr_panel_qty ?? ''),
+        inverter_choice: data.inverter_choice ?? '', inverter_qty: String(data.inverter_qty ?? ''),
+        price_mode: data.price_mode ?? 'per_kw', price_entry: data.price_entry != null ? String(data.price_entry) : '',
       })
       setVisit({
         notes: '', roof_type: data.roof_type ?? '', current_phase: data.current_phase ?? '',
@@ -153,10 +160,11 @@ export default function QuotationDetailClient({ id }: { id: string }) {
 
   const preview = useMemo(() => {
     const kw = Number(form.admin_capacity_kw), ppk = Number(form.price_per_kw)
-    if (!(kw > 0 && ppk > 0)) return null
+    if (!(kw > 0 && (ppk > 0 || Number(form.price_entry) > 0))) return null
     const extras = items.reduce((n, x) => n + (Number(x.quantity) || 1) * (Number(x.unit_price) || 0), 0)
     return buildPrice({ kw, pricePerKw: ppk, extras, discount: Number(form.discount) || 0, region: form.region,
-      consumerType: form.consumer_type, solarType: form.solar_type, panelType: form.panel_type, dcrKw: Number(form.dcr_kw) || null })
+      consumerType: form.consumer_type, solarType: form.solar_type, panelType: form.panel_type, dcrKw: Number(form.dcr_kw) || null,
+      entryMode: form.price_mode, entryValue: Number(form.price_entry) || null })
   }, [form, items])
 
   // ── API helpers ─────────────────────────────────────────────
@@ -181,10 +189,16 @@ export default function QuotationDetailClient({ id }: { id: string }) {
   async function saveEdits(thenSubmit = false, reprice = false, thenApprove = false) {
     const body: Record<string, unknown> = {
       ...(reprice ? { reprice: true, capacity_kw: Number(form.admin_capacity_kw) || null, panel_brand: form.panel_brand || null,
-                      inverter_brand: form.inverter_brand || null, battery_qty: Number(form.battery_qty) || null } : {}),
-      // Mixed panels and inverter phase (quotation_panels_v1.sql): only once the database has these columns
-      ...(q && 'inverter_phase' in q ? { inverter_phase: form.inverter_phase || null,
-          ...(form.panel_type === 'Mixed' ? { dcr_kw: Number(form.dcr_kw) || null, panel_brand_nondcr: form.panel_brand_nondcr || null } : {}) } : {}),
+                      panel_wp: Number(form.panel_wp) || null, inverter_brand: form.inverter_brand || null, battery_qty: Number(form.battery_qty) || null } : {}),
+      // Panels / inverter chosen by hand and the price as typed (quotation_panels_v1.sql): only once the database has these columns
+      ...(q && 'price_mode' in q ? {
+          inverter_phase: form.inverter_phase || null, inverter_choice: form.inverter_choice || null, inverter_qty: Number(form.inverter_qty) || null,
+          dcr_panel_qty: form.panel_type !== 'NonDCR' ? Number(form.dcr_panel_qty) || null : null,
+          nondcr_panel_qty: form.panel_type !== 'DCR' ? Number(form.nondcr_panel_qty) || null : null,
+          panel_brand_nondcr: form.panel_type === 'Mixed' ? form.panel_brand_nondcr || null : null,
+          panel_wp_nondcr: form.panel_type === 'Mixed' ? Number(form.panel_wp_nondcr) || null : null,
+          ...(reprice ? {} : { price_mode: form.price_mode, price_entry: Number(form.price_entry) || null }),
+        } : {}),
       customer_name: form.customer_name, mobile: form.mobile, email: form.email, address: form.address, city: form.city,
       eb_consumer_number: form.eb_consumer_number, region: form.region, consumer_type: form.consumer_type,
       solar_type: form.solar_type, panel_type: form.panel_type, admin_capacity_kw: Number(form.admin_capacity_kw) || null,
@@ -495,21 +509,21 @@ Reason (e.g. duplicate, test, wrong customer):`)
                   {['domestic', 'commercial', 'industrial', 'institution', 'agricultural'].map(x => <option key={x} value={x}>{x[0].toUpperCase() + x.slice(1)}</option>)}</select></Field>
                 <Field label="System type"><select className={INPUT} disabled={!can.edit} value={form.solar_type} onChange={e => set('solar_type', e.target.value)}>
                   {[['ongrid', 'On-grid'], ['hybrid', 'Hybrid'], ['offgrid', 'Off-grid'], ['solar_pump', 'Solar pump']].map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></Field>
-                <Field label="Panels"><select className={INPUT} disabled={!can.edit} value={form.panel_type} onChange={e => set('panel_type', e.target.value)}>
-                  <option value="DCR">DCR (subsidy eligible)</option><option value="NonDCR">Non-DCR</option>
-                  {(form.consumer_type === 'domestic' || form.panel_type === 'Mixed') && <option value="Mixed">Mixed: DCR + Non-DCR</option>}</select></Field>
-                {form.panel_type === 'Mixed' && (
-                  <Field label="DCR part (kW) — the subsidy is on this part"><input className={INPUT} disabled={!can.edit} type="number" min="0.5" step="0.01" value={form.dcr_kw}
-                    placeholder="e.g. 3" onChange={e => set('dcr_kw', e.target.value)} /></Field>
+                {!(can.edit && opts?.available) && (
+                  <Field label="Panels"><select className={INPUT} disabled={!can.edit} value={form.panel_type} onChange={e => set('panel_type', e.target.value)}>
+                    <option value="DCR">DCR (subsidy eligible)</option><option value="NonDCR">Non-DCR</option>
+                    {(form.consumer_type === 'domestic' || form.panel_type === 'Mixed') && <option value="Mixed">Mixed: DCR + Non-DCR</option>}</select></Field>
                 )}
-                <Field label="Inverter phase"><select className={INPUT} disabled={!can.edit} value={form.inverter_phase} onChange={e => set('inverter_phase', e.target.value)}>
-                  <option value="">Automatic (by size)</option><option value="1">Single phase</option><option value="3">Three phase</option></select></Field>
-                <Field label="Size (kW)"><input className={INPUT} disabled={!can.edit} type="number" min="0.5" step="0.01" value={form.admin_capacity_kw} onChange={e => set('admin_capacity_kw', e.target.value)} /></Field>
+                <Field label={Number(form.dcr_panel_qty) > 0 || Number(form.nondcr_panel_qty) > 0 ? 'Size (kW) — set by the number of panels' : 'Size (kW)'}>
+                  <input className={INPUT} disabled={!can.edit || Number(form.dcr_panel_qty) > 0 || Number(form.nondcr_panel_qty) > 0} type="number" min="0.5" step="0.01"
+                    value={form.admin_capacity_kw} onChange={e => set('admin_capacity_kw', e.target.value)} /></Field>
                 <div className="sm:col-span-2">
-                  <PriceInput label="Price" kw={Number(form.admin_capacity_kw) || 0} ppk={Number(form.price_per_kw) || 0} disabled={!can.edit}
+                  <PriceInput label="Price" kw={Number(form.admin_capacity_kw) || 0} disabled={!can.edit}
+                    value={{ ppk: Number(form.price_per_kw) || 0, mode: (form.price_mode || 'per_kw') as PriceMode, entry: Number(form.price_entry) || null }}
                     extras={items.reduce((n, x) => n + (Number(x.quantity) || 1) * (Number(x.unit_price) || 0), 0)} discount={Number(form.discount) || 0}
-                    price={{ kw: Number(form.admin_capacity_kw) || 0, pricePerKw: 0, region: form.region, consumerType: form.consumer_type, solarType: form.solar_type, panelType: form.panel_type, dcrKw: Number(form.dcr_kw) || null }}
-                    onChange={v => set('price_per_kw', v ? String(v) : '')} />
+                    price={{ region: form.region, consumerType: form.consumer_type, solarType: form.solar_type, panelType: form.panel_type, dcrKw: Number(form.dcr_kw) || null }}
+                    onChange={v => { setForm(x => ({ ...x, price_per_kw: v.ppk ? String(v.ppk) : '', price_mode: v.mode, price_entry: v.entry ? String(v.entry) : '' })); setDirty(true) }} />
+                  {!('price_mode' in q) && form.price_mode !== 'per_kw' && <p className="text-[11px] text-amber-700 mt-1">Until the CEO runs the latest database update, a price typed incl. GST is saved as ₹/kW and the total can differ by a rupee.</p>}
                 </div>
                 <Field label="Discount (₹, before GST)"><input className={INPUT} disabled={!can.edit} type="number" min="0" value={form.discount} onChange={e => set('discount', e.target.value)} /></Field>
                 <Field label="Valid until"><input className={INPUT} disabled={!can.edit} type="date" value={form.valid_until} onChange={e => set('valid_until', e.target.value)} /></Field>
@@ -525,17 +539,15 @@ Reason (e.g. duplicate, test, wrong customer):`)
                   {q.priced_from_list && <p className="text-xs text-slate-500">Priced from the {q.price_list_month ?? ''} supplier price list{q.price_per_kw ? ` · ${inr(q.price_per_kw)}/kW before GST` : ''}</p>}
                 </div>
                 {can.edit && opts?.available && (
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 mt-3 items-end">
-                    {(form.panel_type === 'Mixed' || form.inverter_phase) && !('inverter_phase' in q) && <p className="sm:col-span-4 text-xs text-amber-700">Mixed panels and the inverter phase need the latest database update (quotation_panels_v1.sql). Ask the CEO to run it.</p>}
-                    <Field label={form.panel_type === 'Mixed' ? 'DCR panel brand' : 'Panel brand'}><select className={INPUT} value={form.panel_brand} onChange={e => set('panel_brand', e.target.value)}>
-                      <option value="">Best value</option>{(opts.panelBrands?.[(form.consumer_type !== 'domestic' ? 'NonDCR' : form.panel_type === 'Mixed' ? 'DCR' : form.panel_type) as 'DCR' | 'NonDCR'] ?? []).map(b => <option key={b} value={b}>{b}</option>)}</select></Field>
-                    {form.panel_type === 'Mixed' && <Field label="Non-DCR panel brand"><select className={INPUT} value={form.panel_brand_nondcr} onChange={e => set('panel_brand_nondcr', e.target.value)}>
-                      <option value="">Best value</option>{(opts.panelBrands?.NonDCR ?? []).map(b => <option key={b} value={b}>{b}</option>)}</select></Field>}
-                    <Field label="Inverter brand"><select className={INPUT} value={form.inverter_brand} onChange={e => set('inverter_brand', e.target.value)}>
-                      <option value="">Preferred</option>{(opts.inverterBrands?.[form.solar_type === 'hybrid' ? 'hybrid' : 'ongrid'] ?? []).map(b => <option key={b} value={b}>{b}</option>)}</select></Field>
-                    {form.solar_type === 'hybrid' ? <Field label="Batteries"><input className={INPUT} type="number" min="1" value={form.battery_qty} onChange={e => set('battery_qty', e.target.value)} /></Field> : <span />}
-                    <button className="px-3 py-2 bg-slate-800 text-white text-xs font-semibold rounded-lg disabled:opacity-50" disabled={!!busy} onClick={() => saveEdits(false, true)}>
-                      {busy === 'reprice' && <Loader2 size={12} className="animate-spin inline mr-1" />}Re-price from price list</button>
+                  <div className="mt-4 border border-slate-100 rounded-lg p-3 space-y-3">
+                    <p className="text-xs font-semibold text-slate-600">Panels &amp; inverter <span className="font-normal text-slate-400">— choose, then press “Re-price” to update the parts and the list price</span></p>
+                    {!('price_mode' in q) && <p className="text-xs text-amber-700">Choosing panel numbers, mixed panels and the inverter model needs the latest database update (quotation_panels_v1.sql). Ask the CEO to run it.</p>}
+                    <PanelInverterPicker opts={opts} v={form as unknown as PickerValue} set={(k, val) => set(k, val)} />
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button className="px-3 py-2 bg-slate-800 text-white text-xs font-semibold rounded-lg disabled:opacity-50" disabled={!!busy} onClick={() => saveEdits(false, true)}>
+                        {busy === 'reprice' && <Loader2 size={12} className="animate-spin inline mr-1" />}Re-price from price list</button>
+                      <span className="text-[11px] text-slate-500">Uses the list price. To quote your own figure, type it in “Price” afterwards and save.</span>
+                    </div>
                   </div>
                 )}
               </div>

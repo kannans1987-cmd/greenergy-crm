@@ -19,7 +19,8 @@ export async function POST(req: NextRequest) {
     const extras = Array.isArray(b.line_items)
       ? b.line_items.reduce((n: number, x: { quantity?: number; unit_price?: number }) => n + (Number(x.quantity) || 1) * (Number(x.unit_price) || 0), 0) : 0
     const money = buildPrice({ kw: view.kwp, pricePerKw: view.pricePerKwPreGst, extras, discount: Number(b.discount) || 0,
-      region: b.region, consumerType: b.consumer_type, solarType: b.solar_type, panelType: view.type, dcrKw: view.dcrKwp })
+      region: b.region, consumerType: b.consumer_type, solarType: b.solar_type, panelType: view.type, dcrKw: view.dcrKwp,
+      entryMode: b.price_mode, entryValue: Number(b.price_entry) || null })
     return NextResponse.json({
       ...view, money, catalogueVersion: p.catalogueVersion, priceListMonth: p.catalogue.quoteMonth ?? null,
       ...(isManager(me.role) ? { costing: { lines: w.lines, subtotal: w.subtotal, profit: w.profit, profitPct: p.model.profitPct, band: w.band } } : {}),

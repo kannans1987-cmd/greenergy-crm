@@ -179,16 +179,30 @@ export function perKwWarning(ppk: number, kw: number) {
 }
 
 // Price build-up: kW × ₹/kW (before GST) + extras − discount, then GST
+// The price can be given as ₹/kW before GST (pricePerKw), or EXACTLY as typed including GST
+// (entryMode 'per_kw_incl' or 'total_incl' with entryValue): then the total is that figure and the
+// before-GST amount and GST are worked backwards from it, so the customer pays what was entered.
 export function buildPrice(input: { kw: number; pricePerKw: number; extras?: number; discount?: number;
-  region?: string | null; consumerType?: string | null; solarType?: string | null; panelType?: string | null; dcrKw?: number | null }) {
-  const system = Math.round(input.kw * input.pricePerKw + (input.extras ?? 0) - (input.discount ?? 0))
-  const gst = Math.round(system * GST_RATE)
-  const total = system + gst
+  region?: string | null; consumerType?: string | null; solarType?: string | null; panelType?: string | null; dcrKw?: number | null
+  entryMode?: string | null; entryValue?: number | null }) {
+  const extras = input.extras ?? 0, discount = input.discount ?? 0
+  const v = Number(input.entryValue)
+  let system: number, gst: number, total: number, pricePerKw = input.pricePerKw
+  if ((input.entryMode === 'total_incl' || input.entryMode === 'per_kw_incl') && v > 0 && input.kw > 0) {
+    total = input.entryMode === 'total_incl' ? Math.round(v) : Math.round(v * input.kw + (extras - discount) * (1 + GST_RATE))
+    system = Math.round(total / (1 + GST_RATE))
+    gst = total - system
+    pricePerKw = Math.round((system - extras + discount) / input.kw * 100) / 100
+  } else {
+    system = Math.round(input.kw * input.pricePerKw + extras - discount)
+    gst = Math.round(system * GST_RATE)
+    total = system + gst
+  }
   // Mixed panels: the subsidy is worked out on the DCR part only (the whole system must still be a home system up to 10 kW)
   const subsidyKw = input.panelType === 'Mixed' ? Math.min(Number(input.dcrKw) || 0, input.kw) : input.kw
   const aid = subsidyEligible(input.consumerType, input.solarType, input.panelType) && input.kw <= 10 && subsidyKw > 0
     ? residentialSubsidy(input.region, subsidyKw) : { central: 0, state: 0, total: 0, stateName: '' }
-  return { system, gst, total, central: aid.central, state: aid.state, stateName: aid.stateName, subsidy: aid.total, net: total - aid.total }
+  return { system, gst, total, pricePerKw, central: aid.central, state: aid.state, stateName: aid.stateName, subsidy: aid.total, net: total - aid.total }
 }
 
 // ─── Follow-ups & sharing ───────────────────────────────────────

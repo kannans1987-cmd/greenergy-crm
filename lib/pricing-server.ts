@@ -21,6 +21,8 @@ export interface PriceRequest {
   kw: number; consumer_type?: string | null; solar_type?: string | null; panel_type?: string | null; roof_type?: string | null
   panel_brand?: string | null; panel_wp?: number | null; inverter_brand?: string | null; battery_qty?: number | null
   dcr_kw?: number | string | null; panel_brand_nondcr?: string | null; inverter_phase?: string | number | null
+  dcr_panel_qty?: number | string | null; nondcr_panel_qty?: number | string | null; panel_wp_nondcr?: number | string | null
+  inverter_choice?: string | null; inverter_qty?: number | string | null
 }
 
 export function toOpts(r: PriceRequest): WorkoutOpts {
@@ -31,6 +33,11 @@ export function toOpts(r: PriceRequest): WorkoutOpts {
     dcrKw: r.panel_type === 'Mixed' && Number(r.dcr_kw) > 0 ? Number(r.dcr_kw) : null,
     nonDcrBrand: r.panel_brand_nondcr || null,
     phase: String(r.inverter_phase) === '1' ? 1 : String(r.inverter_phase) === '3' ? 3 : null,
+    dcrCount: Number(r.dcr_panel_qty) > 0 ? Number(r.dcr_panel_qty) : null,
+    nonDcrCount: Number(r.nondcr_panel_qty) > 0 ? Number(r.nondcr_panel_qty) : null,
+    nonDcrWp: Number(r.panel_wp_nondcr) > 0 ? Number(r.panel_wp_nondcr) : null,
+    inverterId: r.inverter_choice || null,
+    inverterQty: Number(r.inverter_qty) > 0 ? Number(r.inverter_qty) : null,
     roof: r.roof_type === 'sheet' ? 'shed' : 'rcc',
     systemKind: r.solar_type === 'hybrid' ? 'hybrid' : 'ongrid',
     panelBrand: r.panel_brand || null,

@@ -4,6 +4,24 @@ import { buildPrice, isManager } from '@/lib/workflow'
 import { loadPricing, toOpts, quotationColumns, saveCosting } from '@/lib/pricing-server'
 import { workout, type Workout } from '@/lib/pricing-engine'
 
+
+// Panels / inverter chosen by hand and how the price was typed (quotation_panels_v1.sql)
+const PRICE_MODES_OK = ['per_kw', 'per_kw_incl', 'total_incl']
+function choiceCols(b: Record<string, unknown>) {
+  const int = (v: unknown, lo: number, hi: number) => { const n = Math.round(Number(v)); return v !== '' && v != null && Number.isFinite(n) && n >= lo && n <= hi ? n : null }
+  const out: Record<string, unknown> = {}
+  const d = int(b.dcr_panel_qty, 1, 5000), n = int(b.nondcr_panel_qty, 1, 5000), w = int(b.panel_wp_nondcr, 100, 1000), q = int(b.inverter_qty, 1, 50)
+  if (d) out.dcr_panel_qty = d
+  if (n) out.nondcr_panel_qty = n
+  if (w) out.panel_wp_nondcr = w
+  if (typeof b.inverter_choice === 'string' && b.inverter_choice.trim()) out.inverter_choice = b.inverter_choice.trim().slice(0, 80)
+  if (q) out.inverter_qty = q
+  if (PRICE_MODES_OK.includes(String(b.price_mode)) && b.price_mode !== 'per_kw' && Number(b.price_entry) > 0) {
+    out.price_mode = b.price_mode; out.price_entry = Number(b.price_entry)
+  }
+  return out
+}
+
 // Staff create a quotation (draft). Employees are always the assigned sales person;
 // the CEO / admin manager may assign it to someone else.
 export async function POST(req: NextRequest) {
@@ -37,7 +55,9 @@ export async function POST(req: NextRequest) {
     }
   }
   if (!customer_name || !mobile || !/^[0-9+\-\s]{8,16}$/.test(mobile)) return NextResponse.json({ error: 'Enter the customer name and a valid mobile number.' }, { status: 400 })
-  if (!kw || kw <= 0 || !pricePerKw || pricePerKw <= 0) return NextResponse.json({ error: 'Enter the system size and price per kW.' }, { status: 400 })
+  if (!kw || kw <= 0 || ((!pricePerKw || pricePerKw <= 0) && !(Number(b.price_entry) > 0 && ['per_kw_incl', 'total_incl'].includes(String(b.price_mode))))) {
+    return NextResponse.json({ error: 'Enter the system size and the price.' }, { status: 400 })
+  }
 
   const region = b.region === 'tamilnadu' ? 'tamilnadu' : 'puducherry'
   const consumer_type = str(b.consumer_type) ?? 'domestic'
@@ -50,6 +70,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'For mixed panels, enter the DCR part in kW (less than the total size).' }, { status: 400 })
   }
   const inverter_phase = ['1', '3'].includes(String(b.inverter_phase)) ? String(b.inverter_phase) : null
+  const chosen = choiceCols(b)
   const lineItems: { description: string; quantity: number; unit_price: number; category?: string }[] =
     (Array.isArray(b.line_items) ? b.line_items : [])
       .map((x: { description?: unknown; quantity?: unknown; unit_price?: unknown; category?: unknown }) => ({
@@ -59,7 +80,10 @@ export async function POST(req: NextRequest) {
       .filter((x: { description: string; unit_price: number }) => x.description && x.unit_price)
   const extras = lineItems.reduce((n, x) => n + x.quantity * x.unit_price, 0)
   const discount = Math.max(0, num(b.discount) ?? 0)
-  const p = buildPrice({ kw, pricePerKw, extras, discount, region, consumerType: consumer_type, solarType: solar_type, panelType: panel_type, dcrKw: dcr_kw })
+  // A price typed including GST is kept exactly: the total is that figure
+  const p = buildPrice({ kw, pricePerKw: pricePerKw ?? 0, extras, discount, region, consumerType: consumer_type, solarType: solar_type, panelType: panel_type, dcrKw: dcr_kw,
+    entryMode: chosen.price_mode as string | undefined, entryValue: chosen.price_entry as number | undefined })
+  pricePerKw = p.pricePerKw
   if (p.total <= 0) return NextResponse.json({ error: 'The total must be more than zero.' }, { status: 400 })
 
   const validUntil = new Date(); validUntil.setDate(validUntil.getDate() + 15)
@@ -75,6 +99,7 @@ export async function POST(req: NextRequest) {
     // new columns (quotation_panels_v1.sql) only when used, so other quotations save before that update
     ...(dcr_kw ? { dcr_kw, panel_brand_nondcr: str(b.panel_brand_nondcr, 60) } : {}),
     ...(inverter_phase ? { inverter_phase } : {}),
+    ...chosen,
     loan_required: !!b.loan_required, subsidy_required: p.subsidy > 0, site_visit_required: b.site_visit_required !== false,
     source: str(b.source) ?? 'walk_in', priority: str(b.priority) ?? 'normal', notes: str(b.notes, 2000),
     required_capacity_kw: kw, recommended_capacity_kw: kw,

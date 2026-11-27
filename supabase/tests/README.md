@@ -16,6 +16,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `quotation_view_v1_test.sql` checks "Quotations: view all" (admin executives, project manager): they see every quotation but not supplier costing, cannot change, delete or write on it, can log phone enquiries, and their change requests apply only after the CEO approves; it ends with `ALL QUOTATION VIEW CHECKS PASSED`.
 
+`quotation_panels_v1_test.sql` checks mixed DCR + Non-DCR panels and the chosen inverter phase: valid values only, saved by the preparer, locked after approval, and counted correctly by auto-approval; it ends with `ALL MIXED PANEL CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

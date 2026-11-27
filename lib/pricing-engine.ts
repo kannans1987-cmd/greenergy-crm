@@ -7,6 +7,9 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type PanelType = 'DCR' | 'NonDCR'
+// A home system can mix DCR panels (subsidy part) with cheaper Non-DCR panels for the rest
+export type PanelChoice = PanelType | 'Mixed'
+export interface PanelPart { type: PanelType; id: string; brand: string; wp: number; rate: number; count: number; kwp: number; series?: string; supplier?: string }
 export type Segment = 'domestic' | 'commercial'
 export type Roof = 'rcc' | 'shed'
 
@@ -58,7 +61,8 @@ const values = <T,>(o: Record<string, T> | undefined) => Object.entries(o ?? {})
 
 export interface Line { id: string; label: string; qty: number; unit: string; rate: number; amount: number; note?: string }
 export interface Workout {
-  segment: Segment; type: PanelType; roof: Roof; systemKind: 'ongrid' | 'hybrid'
+  segment: Segment; type: PanelChoice; roof: Roof; systemKind: 'ongrid' | 'hybrid'
+  parts: PanelPart[]; dcrKwp: number; phaseChosen: boolean
   panel: { id: string; brand: string; wp: number; rate: number; series?: string; supplier?: string }
   panels: number; wp: number; kwp: number; band: string; phase: 1 | 3
   inverter: { id?: string; brand?: string; kw: number; qty: number; price: number; label: string; warrantyYears?: number; interpolated?: boolean; multiple?: boolean }
@@ -112,8 +116,9 @@ export function pickInverter(inverters: Inv[], requiredKw: number): Workout['inv
     warning: `No ${fit.brand} inverter between ${lo.kw} and ${fit.kw} kW in the price list; price interpolated — confirm the real model.` }
 }
 
-export function selectInverter(model: CostModel, cat: Catalogue, kind: 'ongrid' | 'hybrid', phase: 1 | 3, requiredKw: number, brand?: string | null) {
-  const all = values(cat.inverters).filter(i => i.active !== false && (i.kind ?? 'ongrid') === kind && (kind === 'hybrid' || i.phase === phase)) as Inv[]
+export function selectInverter(model: CostModel, cat: Catalogue, kind: 'ongrid' | 'hybrid', phase: 1 | 3, requiredKw: number, brand?: string | null, phaseChosen = false) {
+  // Hybrid units: any phase unless a phase was chosen on the quotation
+  const all = values(cat.inverters).filter(i => i.active !== false && (i.kind ?? 'ongrid') === kind && ((kind === 'hybrid' && !phaseChosen) || i.phase === phase)) as Inv[]
   const want = brand || model.preferredInverterBrand
   let list = all.filter(i => keyOf(i.brand) === keyOf(want))
   let warning: string | null = null
@@ -123,6 +128,7 @@ export function selectInverter(model: CostModel, cat: Catalogue, kind: 'ongrid' 
   }
   // single-phase on-grid units above the single-phase limit are never offered
   if (kind === 'ongrid' && phase === 1) list = list.filter(i => i.kw <= model.singlePhaseMaxKw)
+  if (!list.length) return { kw: 0, qty: 0, price: 0, label: `No ${phase}-phase ${kind === 'hybrid' ? 'hybrid' : 'on-grid'} inverter in the price list`, warning: `No ${phase}-phase ${kind === 'hybrid' ? 'hybrid' : 'on-grid'} inverter in the price list. Choose the other phase, or add one to the price list.` }
   const pick = pickInverter(list, requiredKw)
   if (warning) pick.warning = pick.warning ? warning + ' ' + pick.warning : warning
   return pick
@@ -143,32 +149,59 @@ function distBoxFor(cat: Catalogue, kw: number) {
 }
 
 export interface WorkoutOpts {
-  kw: number; segment?: Segment; type?: PanelType; roof?: Roof; systemKind?: 'ongrid' | 'hybrid'
+  kw: number; segment?: Segment; type?: PanelChoice; roof?: Roof; systemKind?: 'ongrid' | 'hybrid'
   panelBrand?: string | null; panelWp?: number | null; inverterBrand?: string | null; batteries?: number; batteryId?: string | null
+  dcrKw?: number | null                                   // Mixed: kW of DCR panels; the rest is Non-DCR
+  nonDcrBrand?: string | null; nonDcrWp?: number | null   // Mixed: the Non-DCR panel
+  phase?: 1 | 3 | null                                    // inverter phase chosen on the quotation (null = automatic)
 }
 
 // Full internal workout for one system (costs and margin — never sent to sales staff or customers)
 export function workout(model: CostModel, cat: Catalogue, opts: WorkoutOpts): Workout {
   const segment: Segment = opts.segment === 'commercial' ? 'commercial' : 'domestic'
-  const type: PanelType = segment === 'commercial' ? 'NonDCR' : opts.type === 'NonDCR' ? 'NonDCR' : 'DCR'
+  const type: PanelChoice = segment === 'commercial' ? 'NonDCR' : opts.type === 'NonDCR' ? 'NonDCR' : opts.type === 'Mixed' ? 'Mixed' : 'DCR'
   const roof: Roof = opts.roof === 'shed' ? 'shed' : 'rcc'
   const systemKind = opts.systemKind === 'hybrid' ? 'hybrid' : 'ongrid'
   const warnings: string[] = []
   if (!(opts.kw > 0)) throw new Error('Enter the system size in kW.')
 
-  const panel = selectPanel(cat, type, opts.panelBrand, opts.panelWp)
-  if (!panel) throw new Error(`No active ${type === 'DCR' ? 'DCR' : 'Non-DCR'} panel in the price list.`)
-  if (panel.warning) warnings.push(panel.warning)
+  // Panels: one type, or DCR for part of the size and Non-DCR for the rest
+  const pick = (t: PanelType, brand?: string | null, wpWant?: number | null) => {
+    const p = selectPanel(cat, t, brand, wpWant)
+    if (!p) throw new Error(`No active ${t === 'DCR' ? 'DCR' : 'Non-DCR'} panel in the price list.`)
+    if (p.warning) warnings.push(p.warning)
+    return p
+  }
+  const part = (t: PanelType, p: ReturnType<typeof pick>, kw: number): PanelPart => {
+    const count = Math.max(1, Math.ceil(kw * 1000 / p.wp - 1e-9))
+    return { type: t, id: p.id, brand: p.brand, wp: p.wp, rate: p.rate, count, kwp: round2(count * p.wp / 1000), series: p.series, supplier: p.supplier }
+  }
+  let parts: PanelPart[]
+  if (type === 'Mixed') {
+    const dcrKw = Number(opts.dcrKw)
+    if (!(dcrKw > 0) || dcrKw >= opts.kw) throw new Error(`For mixed panels, enter the DCR part in kW (more than 0 and less than the total ${opts.kw} kW).`)
+    parts = [part('DCR', pick('DCR', opts.panelBrand, opts.panelWp), dcrKw),
+             part('NonDCR', pick('NonDCR', opts.nonDcrBrand, opts.nonDcrWp), opts.kw - dcrKw)]
+  } else {
+    parts = [part(type, pick(type, opts.panelBrand, opts.panelWp), opts.kw)]
+  }
+  const panel = parts[0]
   const wp = panel.wp, rate = panel.rate
-  const count = Math.ceil(opts.kw * 1000 / wp)
-  const kwp = count * wp / 1000
-  const watts = count * wp
+  const count = parts.reduce((n, p) => n + p.count, 0)
+  const watts = parts.reduce((n, p) => n + p.count * p.wp, 0)
+  const kwp = watts / 1000
+  const dcrKwp = round2(parts.filter(p => p.type === 'DCR').reduce((n, p) => n + p.kwp, 0))
   const band = bandFor(model, segment, kwp)
   const b = model.bands[band]
-  const required = kwp / model.dcAcRatio[type]
-  const phase: 1 | 3 = systemKind === 'hybrid' ? 1 : segment === 'domestic' && required <= model.singlePhaseMaxKw ? 1 : 3
-  const inv = selectInverter(model, cat, systemKind, phase, required, opts.inverterBrand)
+  const required = parts.reduce((n, p) => n + p.count * p.wp / 1000 / model.dcAcRatio[p.type], 0)
+  const phaseChosen = opts.phase === 1 || opts.phase === 3
+  const phase: 1 | 3 = phaseChosen ? opts.phase as 1 | 3
+    : systemKind === 'hybrid' ? 1 : segment === 'domestic' && required <= model.singlePhaseMaxKw ? 1 : 3
+  const inv = selectInverter(model, cat, systemKind, phase, required, opts.inverterBrand, phaseChosen)
   if (inv.warning) warnings.push(inv.warning)
+  if (phaseChosen && phase === 1 && systemKind === 'ongrid' && required > model.singlePhaseMaxKw) {
+    warnings.push(`Single-phase for ${round2(required)} kW of inverter: above ${model.singlePhaseMaxKw} kW the EB normally asks for a three-phase connection.`)
+  }
 
   let battery: Workout['battery'] = null
   if (systemKind === 'hybrid') {
@@ -200,7 +233,8 @@ export function workout(model: CostModel, cat: Catalogue, opts: WorkoutOpts): Wo
     acdb: box ? `${box.fromKw}–${box.toKw ?? '+'} kW band` : '', dcdb: box ? `${box.fromKw}–${box.toKw ?? '+'} kW band` : '' }
 
   const lines: Line[] = [
-    { id: 'panels', label: `Solar panels — ${panel.brand} ${type === 'DCR' ? 'DCR' : 'Non-DCR'} ${wp} Wp`, qty: watts, unit: 'W', rate, amount: watts * rate, note: `${count} × ${wp} Wp` },
+    ...parts.map((p, i) => ({ id: i === 0 ? 'panels' : 'panels_' + p.type.toLowerCase(), label: `Solar panels — ${p.brand} ${p.type === 'DCR' ? 'DCR' : 'Non-DCR'} ${p.wp} Wp`,
+      qty: p.count * p.wp, unit: 'W', rate: p.rate, amount: p.count * p.wp * p.rate, note: `${p.count} × ${p.wp} Wp` })),
     { id: 'inverter', label: `${systemKind === 'hybrid' ? 'Hybrid inverter' : 'Inverter'} (${phase}-phase)`, qty: inv.qty, unit: 'nos', rate: inv.qty ? inv.price / inv.qty : 0, amount: inv.price, note: inv.label },
     ...(battery ? [{ id: 'battery', label: 'Battery', qty: battery.qty, unit: 'nos', rate: battery.price / battery.qty, amount: battery.price, note: battery.label }] : []),
     ...structure,
@@ -217,7 +251,8 @@ export function workout(model: CostModel, cat: Catalogue, opts: WorkoutOpts): Wo
   const gst = preGst * model.gstPct / 100
   const total = preGst + gst
   return {
-    segment, type, roof, systemKind, panel: { id: panel.id, brand: panel.brand, wp, rate, series: panel.series, supplier: panel.supplier },
+    segment, type, roof, systemKind, parts, dcrKwp, phaseChosen,
+    panel: { id: panel.id, brand: panel.brand, wp, rate, series: panel.series, supplier: panel.supplier },
     panels: count, wp, kwp: round2(kwp), band, phase, inverter: inv, battery, lines, warnings,
     subtotal: round2(subtotal), profit: round2(profit), gst: round2(gst), total: round2(total), preGst: round2(preGst),
     perKW: Math.round(total / kwp), perW: round2(total / watts),
@@ -228,7 +263,9 @@ export function workout(model: CostModel, cat: Catalogue, opts: WorkoutOpts): Wo
 export function customerView(w: Workout) {
   return {
     segment: w.segment, type: w.type, roof: w.roof, systemKind: w.systemKind, band: w.band, phase: w.phase,
-    kwp: w.kwp, panels: w.panels, wp: w.wp, panelBrand: w.panel.brand, panelSeries: w.panel.series ?? null,
+    kwp: w.kwp, panels: w.panels, wp: w.wp, panelBrand: w.parts.length > 1 ? w.parts.map(p => p.brand).filter((x, i, a) => a.indexOf(x) === i).join(' + ') : w.panel.brand,
+    panelSeries: w.panel.series ?? null, dcrKwp: w.dcrKwp,
+    mix: w.parts.map(p => ({ type: p.type, brand: p.brand, wp: p.wp, count: p.count, kwp: p.kwp })),
     inverterLabel: w.inverter.label, inverterBrand: w.inverter.brand ?? null, inverterKw: w.inverter.kw, inverterWarrantyYears: w.inverter.warrantyYears ?? null,
     battery: w.battery ? { label: w.battery.label, qty: w.battery.qty, kwh: w.battery.kwh } : null,
     pricePerKwPreGst: Math.round(w.preGst / w.kwp), preGst: Math.round(w.preGst), gst: Math.round(w.gst), total: Math.round(w.total),

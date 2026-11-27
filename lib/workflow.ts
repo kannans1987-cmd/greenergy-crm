@@ -158,17 +158,36 @@ export function residentialSubsidy(region: Region | string | null | undefined, k
 }
 
 export function subsidyEligible(consumerType?: string | null, solarType?: string | null, panelType?: string | null) {
-  return consumerType === 'domestic' && (solarType === 'ongrid' || solarType === 'not_sure' || !solarType) && (panelType ?? 'DCR') === 'DCR'
+  return consumerType === 'domestic' && (solarType === 'ongrid' || solarType === 'not_sure' || !solarType) && ['DCR', 'Mixed'].includes(panelType ?? 'DCR')
+}
+
+// GST-inclusive figures → the ₹/kW before GST that the quotation stores
+export type PriceMode = 'per_kw' | 'per_kw_incl' | 'total_incl'
+export const PRICE_MODES: [PriceMode, string][] = [['per_kw', '₹ per kW, before GST'], ['per_kw_incl', '₹ per kW, including GST'], ['total_incl', 'Total payable, including GST']]
+export function perKwFromEntry(mode: PriceMode, value: number, kw: number, extras = 0, discount = 0) {
+  if (!(value > 0) || !(kw > 0)) return 0
+  if (mode === 'per_kw') return value
+  if (mode === 'per_kw_incl') return Math.round(value / (1 + GST_RATE) * 100) / 100
+  return Math.round(((value / (1 + GST_RATE)) - extras + discount) / kw * 100) / 100
+}
+// A ₹/kW far outside the normal range is usually a total typed into the per-kW box
+export function perKwWarning(ppk: number, kw: number) {
+  if (!(ppk > 0)) return ''
+  if (ppk > 150000) return `₹${Math.round(ppk).toLocaleString('en-IN')} per kW × ${kw} kW is ₹${Math.round(ppk * kw).toLocaleString('en-IN')} before GST. If you typed the total, choose “Total payable, including GST”.`
+  if (ppk < 20000) return `₹${Math.round(ppk).toLocaleString('en-IN')} per kW is very low. Check the figure and the way it is entered.`
+  return ''
 }
 
 // Price build-up: kW × ₹/kW (before GST) + extras − discount, then GST
 export function buildPrice(input: { kw: number; pricePerKw: number; extras?: number; discount?: number;
-  region?: string | null; consumerType?: string | null; solarType?: string | null; panelType?: string | null }) {
+  region?: string | null; consumerType?: string | null; solarType?: string | null; panelType?: string | null; dcrKw?: number | null }) {
   const system = Math.round(input.kw * input.pricePerKw + (input.extras ?? 0) - (input.discount ?? 0))
   const gst = Math.round(system * GST_RATE)
   const total = system + gst
-  const aid = subsidyEligible(input.consumerType, input.solarType, input.panelType)
-    ? residentialSubsidy(input.region, input.kw) : { central: 0, state: 0, total: 0, stateName: '' }
+  // Mixed panels: the subsidy is worked out on the DCR part only (the whole system must still be a home system up to 10 kW)
+  const subsidyKw = input.panelType === 'Mixed' ? Math.min(Number(input.dcrKw) || 0, input.kw) : input.kw
+  const aid = subsidyEligible(input.consumerType, input.solarType, input.panelType) && input.kw <= 10 && subsidyKw > 0
+    ? residentialSubsidy(input.region, subsidyKw) : { central: 0, state: 0, total: 0, stateName: '' }
   return { system, gst, total, central: aid.central, state: aid.state, stateName: aid.stateName, subsidy: aid.total, net: total - aid.total }
 }
 

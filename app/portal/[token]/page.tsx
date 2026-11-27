@@ -53,6 +53,8 @@ interface Quotation {
   panel_count?: number
   inverter_label?: string
   system_phase?: number
+  panel_mix?: { type: string; brand: string; wp: number; count: number; kwp: number }[] | null
+  dcr_kw?: number | null
   battery_label?: string
   battery_qty?: number
 }
@@ -274,7 +276,10 @@ export default function CustomerPortal() {
             {quotation.panel_count ? (
               <div className="mt-4 border-t border-slate-100 pt-4 text-sm space-y-1">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">What you get</p>
-                <p>Solar panels: <b>{quotation.panel_count} × {quotation.panel_brand} {quotation.panel_wp} Wp</b></p>
+                {quotation.panel_mix?.length ? quotation.panel_mix.map((m, i) => (
+                  <p key={i}>Solar panels: <b>{m.count} × {m.brand} {m.wp} Wp</b> {m.type === 'DCR' ? 'DCR (made in India, subsidy eligible)' : 'Non-DCR'}</p>
+                )) : <p>Solar panels: <b>{quotation.panel_count} × {quotation.panel_brand} {quotation.panel_wp} Wp</b></p>}
+                {quotation.panel_mix?.length && quotation.dcr_kw ? <p className='text-xs text-slate-500'>Subsidy is worked out on the {quotation.dcr_kw} kW of DCR panels.</p> : null}
                 {quotation.inverter_label && <p>Inverter: <b>{quotation.inverter_label}</b>{quotation.system_phase ? ` (${quotation.system_phase}-phase)` : ''}</p>}
                 {quotation.battery_label && <p>Battery: <b>{quotation.battery_qty} × {quotation.battery_label}</b></p>}
                 <p className="text-xs text-slate-500">Includes mounting structure, DC/AC cabling, ACDB/DCDB, earthing, lightning arrester, installation and net-meter application support.</p>

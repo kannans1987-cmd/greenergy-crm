@@ -20,13 +20,17 @@ export async function loadPricing() {
 export interface PriceRequest {
   kw: number; consumer_type?: string | null; solar_type?: string | null; panel_type?: string | null; roof_type?: string | null
   panel_brand?: string | null; panel_wp?: number | null; inverter_brand?: string | null; battery_qty?: number | null
+  dcr_kw?: number | string | null; panel_brand_nondcr?: string | null; inverter_phase?: string | number | null
 }
 
 export function toOpts(r: PriceRequest): WorkoutOpts {
   return {
     kw: Number(r.kw),
     segment: ['commercial', 'industrial', 'institution'].includes(String(r.consumer_type)) ? 'commercial' : 'domestic',
-    type: r.panel_type === 'NonDCR' ? 'NonDCR' : 'DCR',
+    type: r.panel_type === 'NonDCR' ? 'NonDCR' : r.panel_type === 'Mixed' ? 'Mixed' : 'DCR',
+    dcrKw: r.panel_type === 'Mixed' && Number(r.dcr_kw) > 0 ? Number(r.dcr_kw) : null,
+    nonDcrBrand: r.panel_brand_nondcr || null,
+    phase: String(r.inverter_phase) === '1' ? 1 : String(r.inverter_phase) === '3' ? 3 : null,
     roof: r.roof_type === 'sheet' ? 'shed' : 'rcc',
     systemKind: r.solar_type === 'hybrid' ? 'hybrid' : 'ongrid',
     panelBrand: r.panel_brand || null,
@@ -42,6 +46,8 @@ export function quotationColumns(w: Workout, catalogueMonth?: string | null) {
   return {
     admin_capacity_kw: v.kwp, recommended_capacity_kw: v.kwp, price_per_kw: v.pricePerKwPreGst,
     panel_brand: v.panelBrand, panel_wp: v.wp, panel_count: v.panels, panel_type: v.type,
+    // only for mixed systems, so single-type quotations save before quotation_panels_v1.sql is run
+    ...(v.type === 'Mixed' ? { panel_mix: v.mix, dcr_kw: v.dcrKwp } : {}),
     inverter_brand: v.inverterBrand, inverter_label: v.inverterLabel, inverter_kw: v.inverterKw, system_phase: v.phase,
     battery_label: v.battery?.label ?? null, battery_qty: v.battery?.qty ?? null,
     priced_from_list: true, price_list_month: catalogueMonth ?? null,

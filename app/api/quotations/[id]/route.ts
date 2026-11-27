@@ -99,11 +99,19 @@ export async function PATCH(
     'admin_remarks', 'priority', 'valid_until', 'source', 'pincode',
     'admin_capacity_kw', 'price_per_kw', 'discount',
     'panel_brand', 'panel_wp', 'inverter_brand', 'battery_qty',
+    'dcr_kw', 'panel_brand_nondcr', 'inverter_phase',   // quotation_panels_v1.sql
   ]
   const MANAGER_FIELDS = ['assigned_sales_id', 'assigned_engineer_id', 'follow_up_manager_id']
 
   const updates: Record<string, unknown> = {}
   for (const f of FIELDS) if (f in body) updates[f] = body[f] === '' ? null : body[f]
+  if ('inverter_phase' in updates) updates.inverter_phase = ['1', '3'].includes(String(updates.inverter_phase)) ? String(updates.inverter_phase) : null
+  if ('panel_type' in updates && updates.panel_type !== 'Mixed') {
+    // Back to one panel type: clear the mix (only if the quotation_panels_v1.sql columns exist)
+    const { data: row } = await supabase.from('quotation_requests').select('*').eq('id', id).maybeSingle()
+    if (row && 'dcr_kw' in row) { updates.dcr_kw = null; updates.panel_brand_nondcr = null; updates.panel_mix = null }
+    else { delete updates.dcr_kw; delete updates.panel_brand_nondcr; delete updates.inverter_phase }
+  }
   for (const f of MANAGER_FIELDS) if (f in body) {
     if (!isManager(me.role)) return NextResponse.json({ error: 'Only the CEO or admin manager can reassign a quotation.' }, { status: 403 })
     updates[f] = body[f] || null
@@ -116,7 +124,7 @@ export async function PATCH(
     const p = await loadPricing().catch(() => null)
     if (!p) return NextResponse.json({ error: 'The price list has not been loaded yet.' }, { status: 503 })
     const { data: cur } = await supabase.from('quotation_requests')
-      .select('admin_capacity_kw, consumer_type, solar_type, panel_type, roof_type, panel_brand, panel_wp, inverter_brand, battery_qty').eq('id', id).maybeSingle()
+      .select('*').eq('id', id).maybeSingle()
     if (!cur) return NextResponse.json({ error: 'Quotation not found.' }, { status: 404 })
     const spec = { ...cur, ...updates } as Record<string, unknown>
     try {
@@ -132,11 +140,11 @@ export async function PATCH(
   }
 
   // Recalculate the money from size, ₹/kW, extras and discount whenever any of them changes
-  const pricingTouched = !!listed || ['admin_capacity_kw', 'price_per_kw', 'discount', 'region', 'consumer_type', 'solar_type', 'panel_type', 'line_items']
+  const pricingTouched = !!listed || ['admin_capacity_kw', 'price_per_kw', 'discount', 'region', 'consumer_type', 'solar_type', 'panel_type', 'dcr_kw', 'line_items']
     .some(f => f in body)
   if (pricingTouched) {
     const { data: cur } = await supabase.from('quotation_requests')
-      .select('admin_capacity_kw, price_per_kw, discount, region, consumer_type, solar_type, panel_type').eq('id', id).maybeSingle()
+      .select('*').eq('id', id).maybeSingle()
     if (!cur) return NextResponse.json({ error: 'Quotation not found.' }, { status: 404 })
     const v = { ...cur, ...updates } as Record<string, unknown>
     let extras = 0
@@ -149,7 +157,10 @@ export async function PATCH(
     const kw = Number(v.admin_capacity_kw), ppk = Number(v.price_per_kw)
     if (kw > 0 && ppk > 0) {
       const p = buildPrice({ kw, pricePerKw: ppk, extras, discount: Number(v.discount) || 0, region: v.region as string,
-        consumerType: v.consumer_type as string, solarType: v.solar_type as string, panelType: v.panel_type as string })
+        consumerType: v.consumer_type as string, solarType: v.solar_type as string, panelType: v.panel_type as string, dcrKw: Number(v.dcr_kw) || null })
+      if (v.panel_type === 'Mixed' && !(Number(v.dcr_kw) > 0 && Number(v.dcr_kw) < kw)) {
+        return NextResponse.json({ error: 'For mixed panels, enter the DCR part in kW (less than the total size).' }, { status: 400 })
+      }
       Object.assign(updates, {
         admin_system_cost: p.system, admin_gst_amount: p.gst, admin_total_cost: p.total, admin_subsidy: p.subsidy,
         admin_net_cost: p.net, central_subsidy: p.central, state_subsidy: p.state, state_subsidy_name: p.stateName || null,

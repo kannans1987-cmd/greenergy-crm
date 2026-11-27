@@ -79,10 +79,13 @@ export async function GET(req: NextRequest) {
       projectStages = stages; payments = pmts
     }
 
+    // Mixed DCR + Non-DCR panels (quotation_panels_v1.sql); read separately so the link works before that update
+    const { data: mix } = await supabase.from('quotation_requests').select('panel_mix, dcr_kw').eq('id', quotation.id).maybeSingle()
+
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { id: _id, project_id: _p, ...safe } = quotation
     return NextResponse.json({
-      quotation: safe,
+      quotation: { ...safe, panel_mix: mix?.panel_mix ?? null, dcr_kw: mix?.dcr_kw ?? null },
       lineItems:     lineItems     ?? [],
       history:       history       ?? [],
       projectStages: projectStages ?? [],

@@ -152,7 +152,7 @@ begin
   select * into c from quotation_costings where quotation_id = q.id;
   sold := coalesce(q.admin_system_cost, 0);
   cost := (c.data->>'subtotal')::numeric;
-  select sum(l.qty) / 1000 into cost_kw from jsonb_to_recordset(coalesce(c.data->'lines', '[]')) as l(id text, qty numeric) where l.id = 'panels';
+  select sum(l.qty) / 1000 into cost_kw from jsonb_to_recordset(coalesce(c.data->'lines', '[]')) as l(id text, qty numeric) where l.id like 'panels%';
 
   if not q.priced_from_list or c.quotation_id is null or cost is null then why := why || 'Not priced from the price list (use "Re-price")'::text; end if;
   if c.quotation_id is not null and cost_kw is not null and abs(cost_kw - coalesce(q.admin_capacity_kw, 0)) > 0.05 then

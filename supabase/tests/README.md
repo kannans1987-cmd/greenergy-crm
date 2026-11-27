@@ -31,3 +31,5 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 `growth_v1_test.sql` checks first contact and alerts, lost reasons, auto-approval, referrals, payments and the commissioning gate; it ends with `ALL GROWTH CHECKS PASSED`.
 
 `service_v1_test.sql` checks AMC contracts and visits, service jobs, technician rights, invoices and O&M clock-in on a job; it ends with `ALL SERVICE CHECKS PASSED`.
+
+`attendance_outside_v1_test.sql` checks "Out on work" sessions (site visits for leads, EB office, purchases, bank / govt office): purpose and note rules, links only to the person's own leads / projects, and that the purpose cannot be changed later; it ends with `ALL OUT-ON-WORK ATTENDANCE CHECKS PASSED`.

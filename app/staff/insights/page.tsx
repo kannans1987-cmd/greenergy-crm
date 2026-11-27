@@ -112,8 +112,9 @@ export default function Insights() {
       const rs = att.filter(a => a.employee_id === p.id)
       const total = rs.reduce((t, a) => t + Number(a.total_hours ?? 0), 0)
       const service = rs.filter(a => a.service_ticket_id).reduce((t, a) => t + Number(a.total_hours ?? 0), 0)
-      const site = rs.filter(a => a.project_id && !a.service_ticket_id).reduce((t, a) => t + Number(a.total_hours ?? 0), 0)
-      return { name: p.full_name, days: new Set(rs.map(a => a.date)).size, total, site, service, office: total - site - service }
+      const site = rs.filter(a => a.work_type === 'site' && a.project_id && !a.service_ticket_id).reduce((t, a) => t + Number(a.total_hours ?? 0), 0)
+      const outside = rs.filter(a => a.work_type === 'outside').reduce((t, a) => t + Number(a.total_hours ?? 0), 0)
+      return { name: p.full_name, days: new Set(rs.map(a => a.date)).size, total, site, service, outside, office: total - site - service - outside }
     }).filter(t => t.total > 0).sort((a, b) => b.total - a.total)
 
     return { qs, funnel, sources, pareto, lostN: lostRows.length, medSpeed, within1h, speedN: speed.length, notCalled, medCycle: median(cycle), cycleN: cycle.length,
@@ -178,13 +179,13 @@ export default function Insights() {
 
         <div className={CARD}>
           <div className="px-5 py-4 border-b border-slate-100"><h2 className="font-semibold text-sm text-slate-900">Team hours this month</h2>
-            <p className="text-xs text-slate-500">From attendance. Site = project work, Service = O&amp;M jobs (billable or AMC). Attendance shows presence, not output: compare with kW installed and jobs closed.</p></div>
+            <p className="text-xs text-slate-500">From attendance. Site = project work, Service = O&amp;M jobs (billable or AMC), Out = site visits, EB office, purchases and other outside work. Attendance shows presence, not output: compare with kW installed and jobs closed.</p></div>
           <div className="overflow-x-auto"><table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs text-slate-500"><tr>{['Name', 'Days', 'Hours', 'Site', 'Service', 'Office / other'].map(h => <th key={h} className="text-left px-4 py-2">{h}</th>)}</tr></thead>
+            <thead className="bg-slate-50 text-xs text-slate-500"><tr>{['Name', 'Days', 'Hours', 'Site', 'Service', 'Out', 'Office / other'].map(h => <th key={h} className="text-left px-4 py-2">{h}</th>)}</tr></thead>
             <tbody className="divide-y divide-slate-50">
-              {m.team.length === 0 ? <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-400">No attendance this month yet.</td></tr> : m.team.map(t => (
+              {m.team.length === 0 ? <tr><td colSpan={7} className="px-4 py-6 text-center text-slate-400">No attendance this month yet.</td></tr> : m.team.map(t => (
                 <tr key={t.name}><td className="px-4 py-2 font-medium">{t.name}</td><td className="px-4 py-2 tabular-nums">{t.days}</td><td className="px-4 py-2 tabular-nums">{t.total.toFixed(1)}</td>
-                  <td className="px-4 py-2 tabular-nums">{t.site.toFixed(1)}</td><td className="px-4 py-2 tabular-nums">{t.service.toFixed(1)}</td><td className="px-4 py-2 tabular-nums">{t.office.toFixed(1)}</td></tr>))}
+                  <td className="px-4 py-2 tabular-nums">{t.site.toFixed(1)}</td><td className="px-4 py-2 tabular-nums">{t.service.toFixed(1)}</td><td className="px-4 py-2 tabular-nums">{t.outside.toFixed(1)}</td><td className="px-4 py-2 tabular-nums">{t.office.toFixed(1)}</td></tr>))}
             </tbody>
           </table></div>
         </div>

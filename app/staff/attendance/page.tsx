@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import Header from '@/components/staff/Header'
 import { format, differenceInMinutes } from 'date-fns'
 import { getBestFix, type Fix } from '@/lib/geo'
-import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2, Smartphone, Wrench } from 'lucide-react'
+import { MapPin, Clock, CheckCircle, AlertTriangle, LogIn, LogOut, Building2, HardHat, Users, Settings, Trash2, Smartphone, Wrench, Car } from 'lucide-react'
 
 // Office staff clock in at the office (GPS must be inside the office radius — the database checks it).
 // Site staff clock in on their project. Managers see everyone's day; the CEO sets the office location.
@@ -17,7 +17,7 @@ interface AttendanceRecord {
   employee_id: string
   date: string
   session_no?: number | null
-  work_type: 'office' | 'site' | null
+  work_type: 'office' | 'site' | 'outside' | null
   clock_in_time: string
   clock_out_time: string | null
   clock_in_address: string | null
@@ -31,7 +31,18 @@ interface AttendanceRecord {
   projects: { name: string } | null
   office_locations?: { name: string } | null
   service_ticket_id?: string | null
+  purpose?: Purpose | null
+  purpose_note?: string | null
+  quotation_id?: string | null
 }
+// "Out on work" (attendance_outside_v1.sql): away from the office on company work
+type Purpose = 'site_visit' | 'eb_office' | 'purchase' | 'bank_govt' | 'other'
+const PURPOSES: [Purpose, string][] = [
+  ['site_visit', 'Site visit / survey'], ['eb_office', 'EB office / net meter'],
+  ['purchase', 'Supplier / purchase'], ['bank_govt', 'Bank / govt office'], ['other', 'Other work'],
+]
+const purposeLabel = (p?: string | null) => PURPOSES.find(([k]) => k === p)?.[1] ?? 'Out on work'
+interface Lead { id: string; quotation_number: string | null; customer_name: string; city: string | null }
 interface Ticket { id: string; ticket_number: string; customer_name: string; site_address: string | null; kind: string }
 interface Staff { id: string; full_name: string; designation: string | null; role: string; attendance_mode?: 'office' | 'field' | null }
 type Mode = 'office' | 'field'
@@ -61,6 +72,8 @@ async function reverseGeocode(lat: number, lng: number): Promise<string> {
 }
 
 function friendly(msg: string) {
+  if (/p_purpose|p_quotation|attendance_purpose|purpose_note/i.test(msg))
+    return '“Out on work” needs the latest database update (attendance_outside_v1.sql). Ask the CEO to run it, or clock in at the office / a project site for now.'
   if (/attendance_one_per_day|attendance_session_per_day|duplicate key/i.test(msg)) return 'You have already clocked in. Refresh the page.'
   if (/work_type|office_location|clock_in_accuracy|clock_out_accuracy|trusted_devices|attendance_clock|register_attendance|schema cache|Could not find the function/i.test(msg))
     return 'The attendance database update has not been run yet. Ask the CEO to run supabase/attendance_devices_v1.sql in Supabase.'
@@ -122,7 +135,13 @@ export default function AttendancePage() {
   const [role,            setRole]            = useState<string>('employee')
   const [projects,        setProjects]        = useState<Project[]>([])
   const [offices,         setOffices]         = useState<Office[]>([])
-  const [workType,        setWorkType]        = useState<'office' | 'site' | 'service'>('office')
+  const [workType,        setWorkType]        = useState<'office' | 'site' | 'service' | 'outside'>('office')
+  const [purpose,         setPurpose]         = useState<Purpose | ''>('')
+  const [purposeNote,     setPurposeNote]     = useState('')
+  const [selectedLead,    setSelectedLead]    = useState('')
+  const [outProject,      setOutProject]      = useState('')
+  const [leads,           setLeads]           = useState<Lead[]>([])
+  const [allProjects,     setAllProjects]     = useState<Project[]>([])
   const [tickets,         setTickets]         = useState<Ticket[]>([])
   const [selectedTicket,  setSelectedTicket]  = useState('')
   const [selectedProject, setSelectedProject] = useState('')
@@ -248,6 +267,14 @@ export default function AttendancePage() {
     const { data: tk } = await supabase.from('service_tickets').select('id, ticket_number, customer_name, site_address, kind')
       .eq('assigned_to', uid).in('status', ['open', 'assigned', 'in_progress']).order('due_date')
     setTickets((tk as Ticket[]) ?? [])
+    // For "Out on work": open leads and projects this person can see (the database limits the list)
+    const [{ data: ld }, { data: pj }] = await Promise.all([
+      supabase.from('quotation_requests').select('id, quotation_number, customer_name, city')
+        .not('status', 'in', '(project_created,cancelled,rejected)').order('created_at', { ascending: false }).limit(300),
+      supabase.from('projects').select('id, name, project_number').order('created_at', { ascending: false }).limit(300),
+    ])
+    setLeads((ld as Lead[]) ?? [])
+    setAllProjects((pj as Project[]) ?? [])
     await loadOffices()
     setPageLoading(false)
   }, [today, loadOffices, loadDevices])
@@ -273,9 +300,14 @@ export default function AttendancePage() {
 
   const say = (msg: string, type: 'success'|'error'|'info') => { setStatus(msg); setStatusType(type) }
 
+  // A note is needed unless the session names a lead / project (and always for "Other work")
+  const outsideNeedsNote = purpose === 'other' || (purpose === 'site_visit' ? !selectedLead : !outProject)
+
   const handleClockIn = async () => {
     if (workType === 'site' && !selectedProject) { say('Please select the project / site before clocking in.', 'error'); return }
     if (workType === 'service' && !selectedTicket) { say('Choose the service job you are at.', 'error'); return }
+    if (workType === 'outside' && !purpose) { say('Choose what you are going out for.', 'error'); return }
+    if (workType === 'outside' && outsideNeedsNote && purposeNote.trim().length < 3) { say('Write where you are going and why.', 'error'); return }
     if (workType === 'office' && activeOffices.length === 0) {
       say('The office location has not been set yet. Ask the CEO to set it (Attendance → Office location).', 'error'); return
     }
@@ -295,14 +327,19 @@ export default function AttendancePage() {
       const { data: newId, error } = await supabase.rpc('attendance_clock_in', {
         p_device:    deviceKey?.id ?? null,
         p_secret:    deviceKey?.secret ?? null,
-        p_work_type: workType === 'office' ? 'office' : 'site',
-        p_project:   workType === 'site' ? selectedProject : null,
+        p_work_type: workType === 'office' ? 'office' : workType === 'outside' ? 'outside' : 'site',
+        p_project:   workType === 'site' ? selectedProject : workType === 'outside' && purpose !== 'site_visit' && outProject ? outProject : null,
         p_lat:       fix.latitude,
         p_lng:       fix.longitude,
         p_accuracy:  fix.accuracy,
         p_address:   address,
         // only sent for a service job, so clock-in keeps working before service_v1.sql is run
         ...(workType === 'service' ? { p_ticket: selectedTicket } : {}),
+        // only sent for "Out on work", so the other choices keep working before attendance_outside_v1.sql is run
+        ...(workType === 'outside' ? {
+          p_purpose: purpose, p_note: purposeNote.trim() || null,
+          p_quotation: purpose === 'site_visit' && selectedLead ? selectedLead : null,
+        } : {}),
       })
       if (error) throw new Error(friendly(error.message))
       const { data } = await supabase.from('attendance').select(SELECT).eq('id', newId as string).single()
@@ -310,6 +347,7 @@ export default function AttendancePage() {
       setTodayRecs(rs => [...rs.filter(r => r.id !== rec.id), rec])
       say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${multi && (rec.session_no ?? 1) > 1 ? ` (session ${rec.session_no})` : ''}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`, 'success')
       if (isManager) loadTeam(teamDate)
+      setPurpose(''); setPurposeNote(''); setSelectedLead(''); setOutProject('')
     } catch (err: unknown) {
       say(err instanceof Error ? err.message : 'Clock-in failed', 'error')
     } finally {
@@ -418,8 +456,10 @@ export default function AttendancePage() {
   const isClockedIn  = !!openRec
   // Office staff: the day is complete after one clock-out. Site / O&M staff can start another session.
   const isClockedOut = !openRec && !multi && !!lastRec?.clock_out_time
+  const leadName = (id?: string | null) => leads.find(x => x.id === id)?.customer_name ?? 'lead'
   const placeOf = (r: AttendanceRecord) =>
     r.work_type === 'office' ? `🏢 ${r.office_locations?.name ?? 'Office'}`
+      : r.work_type === 'outside' ? `🚗 ${purposeLabel(r.purpose)}${r.quotation_id ? ' · ' + leadName(r.quotation_id) : ''}${r.projects?.name ? ' · ' + r.projects.name : ''}${r.purpose_note ? ' · ' + r.purpose_note : ''}`
       : r.service_ticket_id ? `🔧 Service job${r.projects?.name ? ' · ' + r.projects.name : ''}` : (r.projects?.name ?? '—')
 
   if (pageLoading) {
@@ -501,8 +541,8 @@ export default function AttendancePage() {
                   <>
                     <div>
                       <p className="block text-sm font-medium text-slate-700 mb-1.5">{multi && todayRecs.length ? 'Where are you now?' : 'Where are you working today?'}</p>
-                      <div className={`grid gap-2 ${tickets.length ? 'grid-cols-3' : 'grid-cols-2'}`}>
-                        {([['office', 'At the office', Building2], ['site', 'Project site', HardHat], ...(tickets.length ? [['service', 'Service job', Wrench]] as const : [])] as const).map(([v, label, Icon]) => (
+                      <div className={`grid gap-2 grid-cols-2 ${tickets.length ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
+                        {([['office', 'At the office', Building2], ['site', 'Project site', HardHat], ['outside', 'Out on work', Car], ...(tickets.length ? [['service', 'Service job', Wrench]] as const : [])] as const).map(([v, label, Icon]) => (
                           <button key={v} type="button" onClick={() => { setWorkType(v); setStatus('') }}
                             className={`flex items-center justify-center gap-2 py-3 rounded-xl border text-sm font-semibold transition ${
                               workType === v ? 'border-green-600 bg-green-50 text-green-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
@@ -512,7 +552,53 @@ export default function AttendancePage() {
                       </div>
                     </div>
 
-                    {workType === 'service' ? (
+                    {workType === 'outside' ? (
+                      <div className="space-y-3">
+                        <div>
+                          <p className="block text-sm font-medium text-slate-700 mb-1.5">Going out for <span className="text-red-500">*</span></p>
+                          <div className="flex flex-wrap gap-2">
+                            {PURPOSES.map(([k, label]) => (
+                              <button key={k} type="button" onClick={() => { setPurpose(k); setStatus('') }}
+                                className={`px-3 py-2 rounded-lg border text-sm font-medium ${purpose === k ? 'border-green-600 bg-green-50 text-green-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        {purpose === 'site_visit' && (
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1.5">For which lead? <span className="text-slate-400 font-normal">(optional)</span></label>
+                            <select value={selectedLead} onChange={e => setSelectedLead(e.target.value)}
+                              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                              <option value="">— Not in the list / new customer —</option>
+                              {leads.map(l => <option key={l.id} value={l.id}>{l.customer_name}{l.city ? ' · ' + l.city : ''}{l.quotation_number ? ' · ' + l.quotation_number : ''}</option>)}
+                            </select>
+                          </div>
+                        )}
+                        {purpose && purpose !== 'site_visit' && purpose !== 'other' && allProjects.length > 0 && (
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1.5">For which project? <span className="text-slate-400 font-normal">(optional)</span></label>
+                            <select value={outProject} onChange={e => setOutProject(e.target.value)}
+                              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
+                              <option value="">— General / several projects —</option>
+                              {allProjects.map(p => <option key={p.id} value={p.id}>{p.project_number} — {p.name}</option>)}
+                            </select>
+                          </div>
+                        )}
+                        {purpose && (
+                          <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                              Where and what {outsideNeedsNote ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal">(optional)</span>}
+                            </label>
+                            <input value={purposeNote} onChange={e => setPurposeNote(e.target.value)} maxLength={300}
+                              placeholder={purpose === 'eb_office' ? 'e.g. EB Lawspet – net meter file of Ravi' : purpose === 'site_visit' ? 'e.g. Survey at Muthialpet, new enquiry' : 'e.g. Inverter pickup from supplier, Villianur'}
+                              className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-green-500" />
+                          </div>
+                        )}
+                        <p className="text-xs text-slate-500">Your GPS location is recorded at clock-in and clock-out. Clock out when this work is done{multi ? ', then clock in again at the next place' : ''}.</p>
+                        {!multi && <p className="text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg p-2">Your attendance is once a day, so this will be your only session today. If you move between the office and outside work, ask the CEO to set your attendance type to “Field · several a day”.</p>}
+                      </div>
+                    ) : workType === 'service' ? (
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1.5">Which service job? <span className="text-red-500">*</span></label>
                         <select value={selectedTicket} onChange={e => setSelectedTicket(e.target.value)}
@@ -589,7 +675,7 @@ export default function AttendancePage() {
 
                 <button
                   onClick={isClockedIn ? handleClockOut : handleClockIn}
-                  disabled={loading || !canClock || (!isClockedIn && workType === 'site' && !selectedProject) || (!isClockedIn && workType === 'service' && !selectedTicket) || (!isClockedIn && workType === 'office' && activeOffices.length === 0)}
+                  disabled={loading || !canClock || (!isClockedIn && workType === 'site' && !selectedProject) || (!isClockedIn && workType === 'service' && !selectedTicket) || (!isClockedIn && workType === 'outside' && (!purpose || (outsideNeedsNote && purposeNote.trim().length < 3))) || (!isClockedIn && workType === 'office' && activeOffices.length === 0)}
                   className={`w-full py-4 rounded-xl font-bold text-white text-lg transition-all disabled:opacity-50 flex items-center justify-center gap-3 shadow-lg ${
                     isClockedIn ? 'bg-red-500 hover:bg-red-600 shadow-red-200' : 'bg-green-600 hover:bg-green-700 shadow-green-200'}`}>
                   {loading ? <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
@@ -644,9 +730,9 @@ export default function AttendancePage() {
                           <select value={pMode} onChange={e => changeMode(p, e.target.value as Mode)} aria-label={`Attendance type of ${p.full_name}`}
                             className="mt-1 text-xs border border-slate-200 rounded-md px-1.5 py-0.5 bg-white text-slate-600">
                             <option value="office">Office · once a day</option>
-                            <option value="field">Site / O&amp;M · several a day</option>
+                            <option value="field">Field · several a day</option>
                           </select>
-                        ) : pMode === 'field' && <p className="text-[11px] text-slate-400">Site / O&amp;M · several a day</p>}
+                        ) : pMode === 'field' && <p className="text-[11px] text-slate-400">Field · several a day</p>}
                       </td>
                     )
                     if (rs.length === 0) return (

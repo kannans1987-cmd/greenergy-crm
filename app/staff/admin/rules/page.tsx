@@ -41,7 +41,7 @@ export default function Rules() {
   const SaveBtn = ({ k }: { k: string }) => <div className="flex justify-end"><button onClick={() => save(k)} className="px-4 py-2 bg-green-600 text-white text-sm font-semibold rounded-lg flex items-center gap-1"><Save size={14} /> Save</button></div>
 
   if (loading) return <div className="flex items-center justify-center h-screen"><Loader2 className="animate-spin text-green-600" /></div>
-  const a = s.auto_approval ?? {}, r = s.referral ?? {}, g = s.group_buy ?? {}, al = s.alerts ?? {}, c = s.company ?? {}, kb = s.kanban ?? {}, lv = s.leave ?? {}
+  const a = s.auto_approval ?? {}, r = s.referral ?? {}, g = s.group_buy ?? {}, al = s.alerts ?? {}, c = s.company ?? {}, kb = s.kanban ?? {}, lv = s.leave ?? {}, oh = s.office_hours ?? {}
   const tiers: { homes: number; discount_pct: number }[] = g.tiers ?? []
 
   return (
@@ -95,6 +95,20 @@ export default function Rules() {
           </div>
           <p className="text-[11px] text-slate-400">A lead that arrives at night is alerted once the working day starts.</p>
           <SaveBtn k="alerts" />
+        </div>
+
+        <div className={CARD}>
+          <h2 className="font-semibold text-slate-900">Office hours and late marks</h2>
+          <p className="text-xs text-slate-500">The first clock-in of the day after the start time plus the grace is marked <b>late</b> (office, site, out on work and service alike). The weekly off day is never late. Leaving before the closing time shows as “left early”. You can excuse a late mark on the Attendance page.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <F label="Office starts"><input className={INPUT} type="time" value={oh.start ?? '09:40'} onChange={e => set('office_hours', 'start', e.target.value)} /></F>
+            <F label="Office closes"><input className={INPUT} type="time" value={oh.end ?? '18:00'} onChange={e => set('office_hours', 'end', e.target.value)} /></F>
+            <F label="Grace for late comers (minutes)" hint={(() => { const [h, m] = String(oh.start ?? '09:40').split(':').map(Number); const t = h * 60 + m + Number(oh.grace_minutes ?? 40); return `On time until ${(Math.floor(t / 60) % 12) || 12}:${String(t % 60).padStart(2, '0')} ${Math.floor(t / 60) < 12 ? 'AM' : 'PM'}` })()}>
+              <input className={INPUT} type="number" min="0" max="240" value={oh.grace_minutes ?? 40} onChange={e => set('office_hours', 'grace_minutes', Math.max(0, Math.min(240, Math.round(Number(e.target.value)))))} /></F>
+          </div>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={oh.notify_staff ?? true} onChange={e => set('office_hours', 'notify_staff', e.target.checked)} /> Tell the person “Late today”</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={oh.notify_ceo ?? true} onChange={e => set('office_hours', 'notify_ceo', e.target.checked)} /> Tell me when someone is late</label>
+          <SaveBtn k="office_hours" />
         </div>
 
         <div className={CARD}>

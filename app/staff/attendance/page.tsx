@@ -35,6 +35,9 @@ interface AttendanceRecord {
   purpose?: Purpose | null
   purpose_note?: string | null
   quotation_id?: string | null
+  late_minutes?: number | null        // attendance_late_v1.sql: first clock-in after start + grace
+  late_excused?: boolean | null
+  late_excuse_note?: string | null
 }
 // "Out on work" (attendance_outside_v1.sql): away from the office on company work
 type Purpose = 'site_visit' | 'eb_office' | 'purchase' | 'bank_govt' | 'other'
@@ -59,6 +62,15 @@ function distanceM(a: { lat: number; lng: number }, b: { lat: number; lng: numbe
   const h = Math.sin(r(b.lat - a.lat) / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(r(b.lng - a.lng) / 2) ** 2
   return 2 * 6371000 * Math.asin(Math.sqrt(h))
 }
+
+// Office hours (Business rules → Office hours). "09:40" → minutes after midnight / "9:40 AM"
+interface Hours { start: string; end: string; grace: number }
+const DEFAULT_HOURS: Hours = { start: '09:40', end: '18:00', grace: 40 }
+const hm = (t: string) => { const m = /^(\d{1,2}):(\d{2})/.exec(t); return m ? +m[1] * 60 + +m[2] : 0 }
+const hmLabel = (mins: number) => { const h = Math.floor(mins / 60) % 24, m = mins % 60; return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}` }
+// Minutes after midnight in India time
+const istMinutes = (iso: string) => { const d = new Date(new Date(iso).getTime() + 330 * 60000); return d.getUTCHours() * 60 + d.getUTCMinutes() }
+const lateText = (m: number) => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m} min`
 
 const mapLink = (lat: number, lng: number) => `https://www.google.com/maps?q=${lat},${lng}`
 
@@ -174,6 +186,9 @@ export default function AttendancePage() {
   const [staff,    setStaff]    = useState<Staff[]>([])
   const [teamRows, setTeamRows] = useState<AttendanceRecord[]>([])
   const [modeMsg,  setModeMsg]  = useState('')
+  const [hours,    setHours]    = useState<Hours>(DEFAULT_HOURS)
+  const [monthLate, setMonthLate] = useState<Record<string, number>>({})
+  const [lateMsg,  setLateMsg]  = useState('')
   // Who is on leave that day (team_leave_on, attendance_view_v1.sql) and names of leads in "Out on work" sessions
   const [teamLeave, setTeamLeave] = useState<Map<string, { type: string; status: string }>>(new Map())
   const [leadNames, setLeadNames] = useState<Record<string, string>>({})
@@ -303,6 +318,8 @@ export default function AttendancePage() {
     setLeads((ld as Lead[]) ?? [])
     setAllProjects((pj as Project[]) ?? [])
     await loadOffices()
+    const { data: oh } = await supabase.from('business_settings').select('data').eq('key', 'office_hours').maybeSingle()
+    if (oh?.data) setHours({ start: String(oh.data.start ?? DEFAULT_HOURS.start), end: String(oh.data.end ?? DEFAULT_HOURS.end), grace: Number(oh.data.grace_minutes ?? DEFAULT_HOURS.grace) })
     setPageLoading(false)
   }, [today, loadOffices, loadDevices])
 
@@ -318,6 +335,12 @@ export default function AttendancePage() {
     // Leave on that day (before the database update: nothing, the table still works)
     const { data: lv } = await supabase.rpc('team_leave_on', { p_date: date })
     setTeamLeave(new Map(((lv as { employee_id: string; type: string; status: string }[] | null) ?? []).map(l => [l.employee_id, l])))
+    // Late marks this month up to that day (not excused); nothing before the database update
+    const { data: lm } = await supabase.from('attendance').select('employee_id').gt('late_minutes', 0).eq('late_excused', false)
+      .gte('date', date.slice(0, 8) + '01').lte('date', date)
+    const cnt: Record<string, number> = {}
+    for (const r of (lm as { employee_id: string }[] | null) ?? []) cnt[r.employee_id] = (cnt[r.employee_id] ?? 0) + 1
+    setMonthLate(cnt)
     const qids = Array.from(new Set(list.map(r => r.quotation_id).filter(Boolean))) as string[]
     if (qids.length) {
       const { data: qs } = await supabase.from('quotation_requests').select('id, customer_name').in('id', qids)
@@ -395,7 +418,9 @@ export default function AttendancePage() {
       const { data } = await supabase.from('attendance').select(SELECT).eq('id', newId as string).single()
       const rec = data as AttendanceRecord
       setTodayRecs(rs => [...rs.filter(r => r.id !== rec.id), rec])
-      say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${multi && (rec.session_no ?? 1) > 1 ? ` (session ${rec.session_no})` : ''}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`, 'success')
+      const late = Number(rec.late_minutes ?? 0)
+      say(`Clocked in at ${format(new Date(rec.clock_in_time), 'hh:mm a')}${multi && (rec.session_no ?? 1) > 1 ? ` (session ${rec.session_no})` : ''}${rec.work_type === 'office' && rec.clock_in_distance_m != null ? ` · ${rec.clock_in_distance_m} m from the office` : ''}`
+        + (late > 0 ? ` · Late today by ${lateText(late)} (office starts ${hmLabel(hm(hours.start))}, on time until ${hmLabel(hm(hours.start) + hours.grace)}).` : ''), late > 0 ? 'error' : 'success')
       if (seesTeam) loadTeam(teamDate)
       setPurpose(''); setPurposeNote(''); setSelectedLead(''); setOutProject('')
     } catch (err: unknown) {
@@ -455,6 +480,21 @@ export default function AttendancePage() {
     if (out > new Date()) { setFixMsg('❌ That time has not happened yet.'); return }
     const { error } = await supabase.from('attendance').update({ clock_out_time: out.toISOString() }).eq('id', r.id)
     setFixMsg(error ? `❌ ${error.message}` : `✅ ${who}, ${day}: clocked out at ${format(out, 'hh:mm a')} (${((out.getTime() - new Date(r.clock_in_time).getTime()) / 3600000).toFixed(1)} h)`)
+    loadTeam(teamDate)
+  }
+
+  // ── CEO: excuse a late mark (attendance_late_v1.sql) ──
+  const excuseLate = async (r: AttendanceRecord, who: string) => {
+    if (r.late_excused) {
+      if (!window.confirm(`Take back the excuse for ${who}? The late mark counts again.`)) return
+      const { error } = await supabase.rpc('excuse_late', { p_attendance: r.id, p_excused: false, p_note: null })
+      setLateMsg(error ? `❌ ${error.message}` : `${who}: late mark counts again`)
+    } else {
+      const note = window.prompt(`Excuse the late mark of ${who} (${lateText(Number(r.late_minutes))} late)?\n\nReason (they will see it), e.g. "EB office visit first":`)
+      if (!note) return
+      const { error } = await supabase.rpc('excuse_late', { p_attendance: r.id, p_excused: true, p_note: note })
+      setLateMsg(error ? `❌ ${error.message}` : `✅ ${who}: late mark excused`)
+    }
     loadTeam(teamDate)
   }
 
@@ -545,6 +585,9 @@ export default function AttendancePage() {
   const teamOnLeave = staff.filter(p => !byEmp.has(p.id) && teamLeave.has(p.id)).length
   const teamForgot = staff.filter(p => (byEmp.get(p.id) ?? []).some(r => !r.clock_out_time && !isCurrentSession(r, today))).length
   const teamNotIn  = staff.length - teamCame - teamOnLeave
+  const teamLate   = staff.filter(p => (byEmp.get(p.id) ?? []).some(r => Number(r.late_minutes ?? 0) > 0 && !r.late_excused)).length
+  const endMin     = hm(hours.end)
+  const myLate     = todayRecs.find(r => (r.session_no ?? 1) === 1 && Number(r.late_minutes ?? 0) > 0)
   const runFor = (r: AttendanceRecord) => formatHHMM(Math.max(0, differenceInMinutes(new Date(), new Date(r.clock_in_time))))
 
   return (
@@ -618,6 +661,13 @@ export default function AttendancePage() {
           </div>
 
           <div className="p-6 space-y-5">
+            {myLate && (
+              <p className={`text-sm rounded-xl p-3 border ${myLate.late_excused ? 'bg-slate-50 border-slate-100 text-slate-600' : 'bg-red-50 border-red-100 text-red-700'}`}>
+                {myLate.late_excused
+                  ? <>Late today ({lateText(Number(myLate.late_minutes))}) · <b>excused</b>{myLate.late_excuse_note ? `: ${myLate.late_excuse_note}` : ''}</>
+                  : <><b>Late today</b> by {lateText(Number(myLate.late_minutes))}: clocked in at {fmtT(myLate.clock_in_time)}, office starts {hmLabel(hm(hours.start))} (on time until {hmLabel(hm(hours.start) + hours.grace)}).</>}
+              </p>
+            )}
             {!isClockedOut && (
               <>
                 {!isClockedIn && (
@@ -766,6 +816,7 @@ export default function AttendancePage() {
                 </button>
 
                 <p className="text-xs text-slate-400 text-center">📍 Your GPS location is recorded when you clock in and out. Allow “Location” when the phone asks.</p>
+                <p className="text-xs text-slate-500 text-center">🕘 Office hours {hmLabel(hm(hours.start))} – {hmLabel(hm(hours.end))} · on time until {hmLabel(hm(hours.start) + hours.grace)}</p>
               </>
             )}
 
@@ -821,11 +872,14 @@ export default function AttendancePage() {
             <div className="px-5 py-2.5 border-b border-slate-100 flex flex-wrap gap-2 text-xs">
               {teamDate === today && <span className="rounded-full bg-green-50 text-green-800 px-2.5 py-1">● Working now: <b>{teamIn}</b></span>}
               <span className="rounded-full bg-slate-100 text-slate-700 px-2.5 py-1">Came in: <b>{teamCame}</b></span>
+              <span className="rounded-full bg-red-50 text-red-700 px-2.5 py-1">Late: <b>{teamLate}</b></span>
               <span className="rounded-full bg-blue-50 text-blue-800 px-2.5 py-1">On leave: <b>{teamOnLeave}</b></span>
               <span className="rounded-full bg-amber-50 text-amber-800 px-2.5 py-1">Not in: <b>{teamNotIn}</b></span>
               {teamForgot > 0 && <span className="rounded-full bg-red-50 text-red-700 px-2.5 py-1">Forgot to clock out: <b>{teamForgot}</b></span>}
               {teamAt && teamDate === today && <span className="text-slate-400 py-1">Updated {format(teamAt, 'hh:mm a')} · refreshes every 2 min</span>}
+              <span className="text-slate-400 py-1">Office {hmLabel(hm(hours.start))} – {hmLabel(endMin)} · late after {hmLabel(hm(hours.start) + hours.grace)}</span>
             </div>
+            {lateMsg && <p className="px-5 py-2 text-sm text-slate-700 border-b border-slate-100">{lateMsg}</p>}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-100">
@@ -844,6 +898,7 @@ export default function AttendancePage() {
                           <div>
                             <p className="font-medium text-slate-800">{p.full_name}</p>
                             {p.designation && <p className="text-xs text-slate-400">{p.designation}</p>}
+                            {(monthLate[p.id] ?? 0) > 0 && <p className="text-[11px] text-red-600">Late {monthLate[p.id]}× this month</p>}
                           </div>
                         </div>
                         {isCeo ? (
@@ -872,11 +927,20 @@ export default function AttendancePage() {
                             {placeOf(r)}
                             {r.work_type === 'office' && r.clock_in_distance_m != null && <span className="block text-xs text-slate-400">{r.clock_in_distance_m} m from office</span>}
                           </td>
-                          <td className="px-4 py-3 text-slate-600">{fmtT(r.clock_in_time)}</td>
+                          <td className="px-4 py-3 text-slate-600">{fmtT(r.clock_in_time)}
+                            {Number(r.late_minutes ?? 0) > 0 && (
+                              <span className={`block text-xs ${r.late_excused ? 'text-slate-400' : 'text-red-600 font-semibold'}`} title={r.late_excuse_note ?? undefined}>
+                                Late {lateText(Number(r.late_minutes))}{r.late_excused ? ' · excused' : ''}
+                                {isCeo && <button onClick={() => excuseLate(r, p.full_name)} className="ml-1 font-normal text-green-700 underline">{r.late_excused ? 'Undo' : 'Excuse'}</button>}
+                              </span>)}
+                          </td>
                           <td className="px-4 py-3 text-slate-600">
                             {r.clock_out_time ? fmtT(r.clock_out_time) : isCurrentSession(r, today) ? <span className="text-amber-500 text-xs">Working…</span> : (
                               <span className="text-xs text-red-600">Forgot to clock out{isCeo && <button onClick={() => fixClockOut(r, p.full_name)} className="block mt-0.5 text-green-700 underline">Set time</button>}</span>)}
                             {r.is_location_mismatch && <span className="block text-xs text-red-500">⚠ clocked out {r.clock_out_distance_m != null ? `${r.clock_out_distance_m} m away` : 'away from the office'}</span>}
+                            {r.clock_out_time && i === rs.length - 1 && rs.every(x => x.clock_out_time) && r.date === format(new Date(r.clock_out_time), 'yyyy-MM-dd')
+                              && istMinutes(r.clock_out_time) < endMin && (
+                              <span className="block text-xs text-amber-600">Left {lateText(endMin - istMinutes(r.clock_out_time))} early</span>)}
                           </td>
                           <td className="px-4 py-3 font-semibold text-slate-800">{r.total_hours != null ? `${Number(r.total_hours).toFixed(1)}h`
                             : !r.clock_out_time && isCurrentSession(r, today) ? <span className="text-xs font-normal text-amber-600">{runFor(r)} so far</span> : '—'}</td>
@@ -1008,7 +1072,8 @@ export default function AttendancePage() {
                     <td className="px-4 py-3 font-medium text-slate-800">{format(new Date(rec.date), 'dd MMM yyyy')}
                       {(rec.session_no ?? 1) > 1 && <span className="block text-xs font-normal text-slate-400">session {rec.session_no}</span>}</td>
                     <td className="px-4 py-3 text-slate-600 truncate max-w-[160px]">{placeOf(rec)}</td>
-                    <td className="px-4 py-3 text-slate-600">{rec.clock_in_time ? format(new Date(rec.clock_in_time), 'hh:mm a') : '—'}</td>
+                    <td className="px-4 py-3 text-slate-600">{rec.clock_in_time ? format(new Date(rec.clock_in_time), 'hh:mm a') : '—'}
+                      {Number(rec.late_minutes ?? 0) > 0 && <span className={`block text-xs ${rec.late_excused ? 'text-slate-400' : 'text-red-600'}`}>Late {lateText(Number(rec.late_minutes))}{rec.late_excused ? ' · excused' : ''}</span>}</td>
                     <td className="px-4 py-3 text-slate-600">{rec.clock_out_time ? format(new Date(rec.clock_out_time), 'hh:mm a') : isCurrentSession(rec, today) ? <span className="text-amber-500 text-xs">In progress…</span> : <span className="text-red-600 text-xs">Forgot to clock out</span>}</td>
                     <td className="px-4 py-3 font-semibold text-slate-800">{rec.total_hours != null ? `${Number(rec.total_hours).toFixed(1)}h` : '—'}</td>
                   </tr>

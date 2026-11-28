@@ -32,6 +32,8 @@ After editing any part file, rebuild the combined script with `node supabase/bui
 
 `project_manager_v1_test.sql` checks the Project Manager: gives tasks, service jobs and site visits to Solar Technicians, Helpers (by designation), Jr Admin Managers and themselves, never to a Sr Admin Manager, sales staff or the CEO; sees quotations without costing and team attendance; does not approve leave; it ends with `ALL PROJECT MANAGER CHECKS PASSED`.
 
+`attendance_late_v1_test.sql` checks late marks: start 09:40 + 40 min grace (10:20 on time, 10:35 = 55 min late), only the first clock-in of the day, the weekly off never late, the person and the CEO told, a changed or broken setting, and excusing (CEO only, with a reason); it ends with `ALL LATE MARK CHECKS PASSED`.
+
 `attendance_v1_test.sql` checks office GPS clock-in, site clock-in and clock-out rules; it ends with `ALL ATTENDANCE CHECKS PASSED`. Run each test file on its own fresh database.
 
 `quotation_allocation_v1_test.sql` checks the site-visit person, preparer and follow-up person rules; it ends with `ALL ALLOCATION CHECKS PASSED`.

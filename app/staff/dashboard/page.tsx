@@ -26,6 +26,9 @@ interface AttendanceRecord {
   clock_out_time: string | null
   total_hours: number | null
   attendance_status: string
+  session_no?: number | null
+  late_minutes?: number | null
+  late_excused?: boolean | null
 }
 
 interface JobCard {
@@ -89,6 +92,7 @@ export default function EmployeeDashboard() {
   const [tasks,       setTasks]       = useState<Task[]>([])
   const [attendance,  setAttendance]  = useState<AttendanceRecord | null>(null)
   const [todayHours,  setTodayHours]  = useState(0)
+  const [lateToday,   setLateToday]   = useState(0)
   const [isCeo,       setIsCeo]       = useState(false)   // the CEO does not clock in
   const [isMgr,       setIsMgr]       = useState(false)
   const [saOpen,      setSaOpen]      = useState(0)       // CEO: Super Admin changes not yet reviewed
@@ -155,6 +159,8 @@ export default function EmployeeDashboard() {
         const rs = todayAtt as unknown as AttendanceRecord[]
         setAttendance(rs.find(r => r.clock_in_time && !r.clock_out_time) ?? rs[rs.length - 1] ?? null)
         setTodayHours(rs.reduce((t, r) => t + Number(r.total_hours ?? 0), 0))
+        const first = rs.find(r => (r.session_no ?? 1) === 1)
+        setLateToday(first && !first.late_excused ? Number(first.late_minutes ?? 0) : 0)
       }
       if (cards)       setJobCards(cards as unknown as JobCard[])
       if (attMonth) {
@@ -251,7 +257,7 @@ export default function EmployeeDashboard() {
                     : 'Not clocked in today'}
               </p>
               <p className={`text-xs ${isClockedIn ? 'text-green-600' : 'text-amber-600'}`}>
-                {isClockedIn ? 'Your attendance is being tracked' : 'Remember to clock in when you reach the office or site'}
+                {lateToday > 0 ? `Late today by ${lateToday} min` : isClockedIn ? 'Your attendance is being tracked' : 'Remember to clock in when you reach the office or site'}
               </p>
             </div>
           </div>
